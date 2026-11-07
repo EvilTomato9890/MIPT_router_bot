@@ -1,0 +1,25 @@
+{
+  "name": "mipt-router-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Учёт роутеров общежития № 7: Telegram, SQLite, Google Sheets",
+  "engines": {
+    "node": ">=24.12.0 <25"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.mjs",
+    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "check": "prettier --check . && node scripts/check.mjs",
+    "format": "prettier --write .",
+    "demo": "node scripts/demo.mjs",
+    "inspect:sheets": "node --env-file-if-exists=.env scripts/inspect-sheets.mjs",
+    "backup": "node --env-file-if-exists=.env scripts/backup.mjs"
+  },
+  "dependencies": {
+    "google-auth-library": "11.3.3"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}

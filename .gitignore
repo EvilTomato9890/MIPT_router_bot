@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+backups/
+secrets/
+work/
+*.sqlite*
+*.db*
+*.pem
+service-account*.json
+coverage/
+*.log
