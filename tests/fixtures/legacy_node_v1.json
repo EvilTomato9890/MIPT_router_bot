@@ -1,0 +1,307 @@
+{
+  "routerId": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+  "command": {
+    "kind": "issue",
+    "routerId": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+    "recipient": {
+      "kind": "person",
+      "name": "Тестовый получатель",
+      "admissionYear": 2026
+    },
+    "place": {
+      "name": "101",
+      "type": "room",
+      "certainty": "confirmed",
+      "floor": "",
+      "section": ""
+    },
+    "dueAt": "2027-07-01"
+  },
+  "issued": {
+    "routerId": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+    "version": 2,
+    "eventId": "3aa4970d-5c16-4181-ab35-5a5131742b9a",
+    "sheets": "pending"
+  },
+  "campaignId": "191f719f-81f6-431b-81d5-454ebdcac96f",
+  "events": [
+    {
+      "id": "2854ed87-5559-40bc-b5d1-583f0aeefe27",
+      "at": "2026-11-09T13:44:15.918Z",
+      "actor": 1,
+      "object_id": "2",
+      "action": "Изменение доступа",
+      "before_json": "null",
+      "after_json": "\"operator\"",
+      "reason": null,
+      "correction_of": null
+    },
+    {
+      "id": "132852df-9216-4f1d-a504-ef481a0fadd7",
+      "at": "2027-06-01T10:00:00.000Z",
+      "actor": 1,
+      "object_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+      "action": "add",
+      "before_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":0},\"loans\":[]}",
+      "after_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":1},\"loans\":[]}",
+      "reason": null,
+      "correction_of": null
+    },
+    {
+      "id": "3aa4970d-5c16-4181-ab35-5a5131742b9a",
+      "at": "2027-06-01T10:00:00.000Z",
+      "actor": 2,
+      "object_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+      "action": "issue",
+      "before_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":1},\"loans\":[]}",
+      "after_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"issued\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":null,\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":2},\"loans\":[{\"id\":\"480ce243-3ea9-4dec-b83b-b2993a20874f\",\"routerId\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"open\":true,\"recipient\":{\"kind\":\"person\",\"name\":\"Тестовый получатель\",\"admissionYear\":2026,\"id\":\"50d7e1ad-f092-45b6-b41e-365b331f9f91\"},\"place\":{\"name\":\"101\",\"type\":\"room\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"issuedAt\":\"2027-06-01\",\"dueAt\":\"2027-07-01\",\"dueConfirmed\":true,\"issuer\":2,\"kitOut\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"conditionOut\":\"working\",\"returnedAt\":null,\"receiver\":null,\"kitIn\":null,\"conditionIn\":null,\"closedKind\":null,\"linkedLoanId\":null,\"assignedOperator\":2,\"priority\":0,\"exception\":null,\"incomplete\":[]}]}",
+      "reason": null,
+      "correction_of": null
+    },
+    {
+      "id": "5e5224a8-d58a-4659-9762-92c3f8e482cf",
+      "at": "2026-11-09T13:44:15.956Z",
+      "actor": 1,
+      "object_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+      "action": "Настройка кампании",
+      "before_json": "null",
+      "after_json": "{\"id\":\"191f719f-81f6-431b-81d5-454ebdcac96f\",\"active\":false,\"name\":\"Тестовая прежняя кампания\",\"admissionYear\":2026,\"startsAt\":\"2027-06-01\",\"deadline\":\"2027-07-01\",\"responsibleIds\":[2],\"location\":\"Тестовый склад\",\"hours\":\"10–18\",\"instruction\":\"Сдать роутер\",\"version\":1}",
+      "reason": null,
+      "correction_of": null
+    },
+    {
+      "id": "50863442-6919-46a7-8ce7-23346c66727e",
+      "at": "2026-11-09T13:44:15.959Z",
+      "actor": 1,
+      "object_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+      "action": "Запуск кампании",
+      "before_json": "null",
+      "after_json": "{\"count\":1,\"clarify\":0}",
+      "reason": null,
+      "correction_of": null
+    }
+  ],
+  "tables": {
+    "roles": [
+      {
+        "user_id": 1,
+        "role": "admin"
+      },
+      {
+        "user_id": 2,
+        "role": "operator"
+      }
+    ],
+    "routers": [
+      {
+        "id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "inventory": "LEGACY-TEST",
+        "serial_norm": null,
+        "mac_norm": null,
+        "status": "issued",
+        "condition": "working",
+        "version": 2,
+        "data": "{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"issued\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":null,\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":2}"
+      }
+    ],
+    "loans": [
+      {
+        "id": "480ce243-3ea9-4dec-b83b-b2993a20874f",
+        "router_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "open": 1,
+        "data": "{\"id\":\"480ce243-3ea9-4dec-b83b-b2993a20874f\",\"routerId\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"open\":true,\"recipient\":{\"kind\":\"person\",\"name\":\"Тестовый получатель\",\"admissionYear\":2026,\"id\":\"50d7e1ad-f092-45b6-b41e-365b331f9f91\"},\"place\":{\"name\":\"101\",\"type\":\"room\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"issuedAt\":\"2027-06-01\",\"dueAt\":\"2027-07-01\",\"dueConfirmed\":true,\"issuer\":2,\"kitOut\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"conditionOut\":\"working\",\"returnedAt\":null,\"receiver\":null,\"kitIn\":null,\"conditionIn\":null,\"closedKind\":null,\"linkedLoanId\":null,\"assignedOperator\":2,\"priority\":0,\"exception\":null,\"incomplete\":[]}"
+      }
+    ],
+    "settings": [
+      {
+        "key": "bootstrapped",
+        "value": "true"
+      },
+      {
+        "key": "notice:191f719f-81f6-431b-81d5-454ebdcac96f:2",
+        "value": "\"2027-06-17\""
+      }
+    ],
+    "events": [
+      {
+        "id": "2854ed87-5559-40bc-b5d1-583f0aeefe27",
+        "at": "2026-11-09T13:44:15.918Z",
+        "actor": 1,
+        "object_id": "2",
+        "action": "Изменение доступа",
+        "before_json": "null",
+        "after_json": "\"operator\"",
+        "reason": null,
+        "correction_of": null
+      },
+      {
+        "id": "132852df-9216-4f1d-a504-ef481a0fadd7",
+        "at": "2027-06-01T10:00:00.000Z",
+        "actor": 1,
+        "object_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "action": "add",
+        "before_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":0},\"loans\":[]}",
+        "after_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":1},\"loans\":[]}",
+        "reason": null,
+        "correction_of": null
+      },
+      {
+        "id": "3aa4970d-5c16-4181-ab35-5a5131742b9a",
+        "at": "2027-06-01T10:00:00.000Z",
+        "actor": 2,
+        "object_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "action": "issue",
+        "before_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"stored\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":{\"name\":\"Склад\",\"type\":\"warehouse\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":1},\"loans\":[]}",
+        "after_json": "{\"router\":{\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"inventory\":\"LEGACY-TEST\",\"model\":null,\"serial\":null,\"mac\":null,\"status\":\"issued\",\"condition\":\"working\",\"vip\":false,\"vipComment\":\"\",\"storage\":null,\"kit\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"note\":\"\",\"legacy\":{},\"createdAt\":\"2027-06-01T10:00:00.000Z\",\"updatedAt\":\"2027-06-01T10:00:00.000Z\",\"version\":2},\"loans\":[{\"id\":\"480ce243-3ea9-4dec-b83b-b2993a20874f\",\"routerId\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"open\":true,\"recipient\":{\"kind\":\"person\",\"name\":\"Тестовый получатель\",\"admissionYear\":2026,\"id\":\"50d7e1ad-f092-45b6-b41e-365b331f9f91\"},\"place\":{\"name\":\"101\",\"type\":\"room\",\"certainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\"},\"issuedAt\":\"2027-06-01\",\"dueAt\":\"2027-07-01\",\"dueConfirmed\":true,\"issuer\":2,\"kitOut\":{\"power\":true,\"cable\":true,\"other\":\"\"},\"conditionOut\":\"working\",\"returnedAt\":null,\"receiver\":null,\"kitIn\":null,\"conditionIn\":null,\"closedKind\":null,\"linkedLoanId\":null,\"assignedOperator\":2,\"priority\":0,\"exception\":null,\"incomplete\":[]}]}",
+        "reason": null,
+        "correction_of": null
+      },
+      {
+        "id": "5e5224a8-d58a-4659-9762-92c3f8e482cf",
+        "at": "2026-11-09T13:44:15.956Z",
+        "actor": 1,
+        "object_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+        "action": "Настройка кампании",
+        "before_json": "null",
+        "after_json": "{\"id\":\"191f719f-81f6-431b-81d5-454ebdcac96f\",\"active\":false,\"name\":\"Тестовая прежняя кампания\",\"admissionYear\":2026,\"startsAt\":\"2027-06-01\",\"deadline\":\"2027-07-01\",\"responsibleIds\":[2],\"location\":\"Тестовый склад\",\"hours\":\"10–18\",\"instruction\":\"Сдать роутер\",\"version\":1}",
+        "reason": null,
+        "correction_of": null
+      },
+      {
+        "id": "50863442-6919-46a7-8ce7-23346c66727e",
+        "at": "2026-11-09T13:44:15.959Z",
+        "actor": 1,
+        "object_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+        "action": "Запуск кампании",
+        "before_json": "null",
+        "after_json": "{\"count\":1,\"clarify\":0}",
+        "reason": null,
+        "correction_of": null
+      }
+    ],
+    "requests": [
+      {
+        "key": "legacy:role",
+        "actor": 1,
+        "signature": "ea1eea77128ee28d2109da2b8afa2c649979e986693cafa3b20b94f977397871",
+        "result": "{\"target\":2,\"role\":\"operator\"}"
+      },
+      {
+        "key": "legacy:add",
+        "actor": 1,
+        "signature": "8858c91765a4978a6a622fba5e9d19aab2cd00de15e725fa5c5c78181fab724a",
+        "result": "{\"routerId\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"version\":1,\"eventId\":\"132852df-9216-4f1d-a504-ef481a0fadd7\",\"sheets\":\"pending\"}"
+      },
+      {
+        "key": "legacy:issue",
+        "actor": 2,
+        "signature": "0bb3d13e5a1bc4ac0457ee7d8dc7877306d1eaf989e4d59412cc16351244bb16",
+        "result": "{\"routerId\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"version\":2,\"eventId\":\"3aa4970d-5c16-4181-ab35-5a5131742b9a\",\"sheets\":\"pending\"}"
+      },
+      {
+        "key": "legacy:campaign",
+        "actor": 1,
+        "signature": "81e9078d4377fdc1b87ed82a8dfe930d3cfa6333e6f22f148b4415d909b81052",
+        "result": "{\"id\":\"191f719f-81f6-431b-81d5-454ebdcac96f\",\"active\":false,\"name\":\"Тестовая прежняя кампания\",\"admissionYear\":2026,\"startsAt\":\"2027-06-01\",\"deadline\":\"2027-07-01\",\"responsibleIds\":[2],\"location\":\"Тестовый склад\",\"hours\":\"10–18\",\"instruction\":\"Сдать роутер\",\"version\":1}"
+      },
+      {
+        "key": "legacy:launch",
+        "actor": 1,
+        "signature": "aeb0211d52a1308c4aa7e4d9055ffdfc1fc480e248c42325225044529ea2abb5",
+        "result": "{\"included\":1,\"clarify\":0}"
+      }
+    ],
+    "outbox": [],
+    "snapshots": [
+      {
+        "router_id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "data": "{\"inventory\":\"LEGACY-TEST\",\"mac\":\"\",\"place\":\"101\",\"status\":\"Выдан\",\"checked\":\"\",\"owner\":\"Тестовый получатель\",\"checkin\":\"\",\"checkout\":\"\",\"rawContact\":\"\",\"note\":\"\",\"id\":\"ad234f91-da8a-485a-bc51-4ee55291faa8\",\"model\":\"\",\"serial\":\"\",\"condition\":\"Исправен\",\"vip\":false,\"vipComment\":\"\",\"phone\":\"\",\"telegram\":\"\",\"userId\":\"\",\"recipientKind\":\"person\",\"recipientId\":\"50d7e1ad-f092-45b6-b41e-365b331f9f91\",\"group\":\"\",\"admissionYear\":2026,\"academicYear\":\"\",\"issuedAt\":\"2027-06-01\",\"dueAt\":\"2027-07-01\",\"dueConfirmed\":true,\"returnedAt\":\"\",\"placeType\":\"room\",\"placeCertainty\":\"confirmed\",\"floor\":\"\",\"section\":\"\",\"power\":true,\"cable\":true,\"other\":\"\",\"responsible\":\"\",\"assignedOperator\":2}"
+      }
+    ],
+    "campaigns": [
+      {
+        "id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+        "data": "{\"id\":\"191f719f-81f6-431b-81d5-454ebdcac96f\",\"active\":true,\"name\":\"Тестовая прежняя кампания\",\"admissionYear\":2026,\"startsAt\":\"2027-06-01\",\"deadline\":\"2027-07-01\",\"responsibleIds\":[2],\"location\":\"Тестовый склад\",\"hours\":\"10–18\",\"instruction\":\"Сдать роутер\",\"version\":2}",
+        "version": 2
+      }
+    ],
+    "campaign_members": [
+      {
+        "campaign_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+        "loan_id": "480ce243-3ea9-4dec-b83b-b2993a20874f",
+        "data": "{\"source\":\"cohort\",\"at\":\"2027-06-01T10:00:00.000Z\"}"
+      }
+    ],
+    "reminders": [
+      {
+        "key": "191f719f-81f6-431b-81d5-454ebdcac96f:2:c64ab69f05cf9bc0ec8746a0d27980828ec9564cca50f5d848ef69835a7ee435",
+        "campaign_id": "191f719f-81f6-431b-81d5-454ebdcac96f",
+        "target": 2,
+        "due_at": "2027-06-17T10:00:00.000Z",
+        "state": "sent",
+        "attempts": 0,
+        "last_error": null
+      }
+    ],
+    "sessions": [
+      {
+        "user_id": 2,
+        "data": "{\"mode\":\"wizard\",\"kind\":\"issue\"}"
+      }
+    ],
+    "drafts": [
+      {
+        "id": "7b886fca-83f9-4990-92d1-f09cdd9dfc8e",
+        "user_id": 2,
+        "kind": "confirm",
+        "data": "{\"kind\":\"old-dialog\"}",
+        "expires_at": "2026-11-09T14:14:15.966Z"
+      }
+    ]
+  },
+  "sheetRows": [
+    {
+      "row": 2,
+      "values": {
+        "inventory": "LEGACY-TEST",
+        "mac": "",
+        "place": "101",
+        "status": "Выдан",
+        "checked": "",
+        "owner": "Тестовый получатель",
+        "checkin": "",
+        "checkout": "",
+        "rawContact": "",
+        "note": "",
+        "id": "ad234f91-da8a-485a-bc51-4ee55291faa8",
+        "model": "",
+        "serial": "",
+        "condition": "Исправен",
+        "vip": false,
+        "vipComment": "",
+        "phone": "",
+        "telegram": "",
+        "userId": "",
+        "recipientKind": "person",
+        "recipientId": "50d7e1ad-f092-45b6-b41e-365b331f9f91",
+        "group": "",
+        "admissionYear": 2026,
+        "academicYear": "",
+        "issuedAt": "2027-06-01",
+        "dueAt": "2027-07-01",
+        "dueConfirmed": true,
+        "returnedAt": "",
+        "placeType": "room",
+        "placeCertainty": "confirmed",
+        "floor": "",
+        "section": "",
+        "power": true,
+        "cable": true,
+        "other": "",
+        "responsible": "",
+        "assignedOperator": 2
+      },
+      "formulas": []
+    }
+  ]
+}

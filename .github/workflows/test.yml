@@ -1,17 +1,24 @@
-name: Checks
+name: Python checks
 on: [push, pull_request]
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          node-version-file: .node-version
-          cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - run: npm run demo
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m pytest -q
+      - run: python -m router_bot demo
