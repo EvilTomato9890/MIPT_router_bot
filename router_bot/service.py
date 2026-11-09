@@ -17,6 +17,7 @@ from .util import (
     now_utc,
     optional,
     overdue,
+    phone_number,
     require,
     stable,
     stamp,
@@ -325,6 +326,20 @@ class Inventory:
             require(valid_id(r["contact"]["userId"]), "Неверный подтверждённый Telegram ID")
         if r.get("contact"):
             r["contact"] = resolve_contact(self.s, r["contact"])
+        if not legacy:
+            details = r.get("contact") or {}
+            method = details.get("method") or (
+                "telegram_id"
+                if valid_id(details.get("userId")) and not details.get("phone")
+                else "phone"
+            )
+            require(method in {"phone", "telegram_id"}, "Выберите телефон или Telegram ID")
+            if method == "phone":
+                phone_number(details.get("phone"))
+            else:
+                require(
+                    valid_id(details.get("userId")), "Укажите числовой Telegram ID вместо телефона"
+                )
         return r
 
     def _validate(self, r):

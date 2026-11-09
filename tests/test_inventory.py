@@ -313,8 +313,8 @@ def test_metadata_in_sqlite_without_google_columns(ctx):
             "admissionYear": 2025,
             "academicYear": "",
             "contact": {
-                "raw": "@demo_user",
-                "phone": None,
+                "raw": "@demo_user +70000000000",
+                "phone": "+70000000000",
                 "telegram": "demo_user",
                 "userId": None,
             },

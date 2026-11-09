@@ -4,7 +4,17 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .service import place
-from .util import CONDITION, DomainError, contact, contact_text, iso_date, normalize_mac, require
+from .util import (
+    CONDITION,
+    DomainError,
+    contact,
+    contact_text,
+    iso_date,
+    normalize_mac,
+    phone_number,
+    require,
+    valid_id,
+)
 
 
 @dataclass
@@ -73,16 +83,28 @@ def is_person(data):
 
 def contact_fields():
     return [
-        string(
-            "contactInput", "Контакт: @telegram, ссылка t.me, телефон или всё вместе (или -)", True
+        Field(
+            "phone",
+            "Телефон получателя (обязательно), например +79991234567",
+            phone_number,
+            when=lambda d: d.get("contactMethod", "phone") == "phone",
         ),
-        number(
+        Field(
             "userId",
-            "Telegram ID пока неизвестен. Введите подтверждённый числовой ID или -",
-            True,
-            lambda d: not d.get("userId"),
+            "Числовой Telegram ID получателя вместо телефона (обязательно)",
+            telegram_id,
+            when=lambda d: d.get("contactMethod") == "telegram_id",
         ),
     ]
+
+
+def telegram_id(value):
+    try:
+        identifier = int(value)
+    except (ValueError, TypeError):
+        raise DomainError("Введите числовой Telegram ID получателя") from None
+    require(valid_id(identifier), "Введите положительный числовой Telegram ID получателя")
+    return identifier
 
 
 def recipient_fields(extended=False):
@@ -319,6 +341,18 @@ def fields(kind, data=None):
 
 
 def contact_from(data):
+    method = data.get("contactMethod")
+    if method in {"phone", "telegram_id"}:
+        value = {
+            "method": method,
+            "phone": phone_number(data.get("phone")) if method == "phone" else None,
+            "telegram": data.get("telegram") or None,
+            "userId": data.get("userId"),
+        }
+        if method == "telegram_id":
+            value["userId"] = telegram_id(value["userId"])
+        value["raw"] = contact_text(value)
+        return value
     if "contactInput" in data:
         value = contact(data["contactInput"])
         value["userId"] = data.get("userId") or value["userId"]
@@ -352,7 +386,7 @@ def command(kind, data, inventory, actor):
                 "admissionYear": d.get("admissionYear"),
                 "academicYear": d.get("academicYear", ""),
                 "responsible": d.get("responsible", ""),
-                "contact": contact_from(d),
+                "contact": contact_from({"contactMethod": "phone", **d}),
             },
             "place": place(d["placeName"]),
             "dueAt": d["dueAt"],
@@ -392,7 +426,7 @@ def command(kind, data, inventory, actor):
                 if k in d
             }
         )
-        out["contact"] = contact_from(d)
+        out["contact"] = contact_from({"contactMethod": "phone", **d})
         out["collectionEligible"] = d.get("collectionEligible", bool(d.get("admissionYear")))
         return out
     out.update(
@@ -471,6 +505,7 @@ FIELD_LABELS = {
     "telegram": "Telegram",
     "userId": "Подтверждённый Telegram ID",
     "contactInput": "Контакт",
+    "contactMethod": "Способ связи",
     "dueAt": "Срок возврата",
     "issuedAt": "Дата выдачи",
     "reason": "Причина",

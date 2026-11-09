@@ -11,18 +11,21 @@ from .util import (
     CONDITION,
     STATUS,
     DomainError,
-    contact_text,
+    contact,
     csv_cell,
     equal,
     local_clock,
     overdue,
+    phone_number,
     require,
     stable,
     stamp,
     uuid,
+    valid_id,
 )
 
 READ_WIZARDS = {"filters", "loan_report", "queue_filters"}
+CONTACT_WIZARDS = {"issue", "transfer", "loan_details"}
 ADMIN_WIZARDS = ADMIN_ACTIONS | {
     "role",
     "campaign",
@@ -57,6 +60,8 @@ VALUES = {
     "exclude": "Исключить",
     "assign": "Назначить оператора",
     "priority": "Порядок",
+    "phone": "Телефон",
+    "telegram_id": "Telegram ID",
 }
 
 
@@ -106,20 +111,41 @@ class Bot:
     def _session(self, actor):
         row = self.s.get("SELECT data FROM sessions WHERE user_id=?", actor)
         session = json.loads(row["data"]) if row else None
-        if session and session.get("mode") == "wizard" and session.get("dialogVersion") != 2:
+        if (
+            session
+            and session.get("mode") in {"wizard", "confirm"}
+            and session.get("dialogVersion") != 3
+        ):
             data = session["data"]
-            if "phone" in data or "telegram" in data:
-                data["contactInput"] = contact_text(contact_from(data))
-            session.update(dialogVersion=2, step=0, visited=[], nonce=uuid()[:8])
-            while session["step"] < len(fields(session["kind"], data)):
-                f = fields(session["kind"], data)[session["step"]]
-                if f.when and not f.when(data):
+            if session["kind"] in CONTACT_WIZARDS:
+                saved = contact_from(data)
+                try:
+                    data["phone"] = phone_number(saved.get("phone"))
+                except DomainError:
+                    data.pop("phone", None)
+                if saved.get("telegram"):
+                    data["telegram"] = saved["telegram"]
+                if valid_id(saved.get("userId")):
+                    data["userId"] = saved["userId"]
+                else:
+                    data.pop("userId", None)
+                data["contactMethod"] = "phone"
+                if session.get("draftId"):
+                    session["replacedDraft"] = session.pop("draftId")
+                    self.s.run("DELETE FROM drafts WHERE id=?", session["replacedDraft"])
+                session["mode"] = "wizard"
+            session["dialogVersion"] = 3
+            if session["mode"] == "wizard":
+                session.update(step=0, visited=[], nonce=uuid()[:8])
+                while session["step"] < len(fields(session["kind"], data)):
+                    f = fields(session["kind"], data)[session["step"]]
+                    if f.when and not f.when(data):
+                        session["step"] += 1
+                        continue
+                    if f.key not in data:
+                        break
+                    session["visited"].append(session["step"])
                     session["step"] += 1
-                    continue
-                if f.key not in data:
-                    break
-                session["visited"].append(session["step"])
-                session["step"] += 1
             self._save_session(actor, session)
         return session
 
@@ -181,25 +207,23 @@ class Bot:
         require(session and session["mode"] == "wizard", "Сначала начните ввод контакта")
         f = fields(session["kind"], session["data"])[session["step"]]
         require(
-            f.key in {"contactInput", "userId"},
+            f.key in {"phone", "userId"},
             "Контакт можно отправить на шаге контакта или Telegram ID",
         )
         # Sharing a contact supplies a real user ID, not a username guess.
         require(
-            f.key == "contactInput" or shared.get("user_id"),
-            "В этой карточке нет Telegram ID; введите ID или -",
+            f.key == "phone" or shared.get("user_id"),
+            "В этой карточке нет Telegram ID; введите числовой ID или выберите телефон",
         )
         if shared.get("user_id"):
             session["data"]["userId"] = shared["user_id"]
-        elif f.key == "contactInput":
+        elif f.key == "phone":
             session["data"].pop("userId", None)
-        session["data"]["sharedContact"] = bool(shared.get("user_id")) and f.key == "contactInput"
+        session["data"]["sharedContact"] = bool(shared.get("user_id")) and f.key == "phone"
         self._save_session(actor, session)
         return self.answer_wizard(
             actor,
-            str(shared.get("phone_number") or "-")
-            if f.key == "contactInput"
-            else str(shared["user_id"]),
+            str(shared.get("phone_number") or "-") if f.key == "phone" else str(shared["user_id"]),
         )
 
     def handle(self, update):
@@ -234,6 +258,7 @@ class Bot:
                         if shared:
                             self._shared_contact(actor, shared)
                         else:
+                            message_text = str(m.get("text", ""))
                             mentions = [
                                 e["user"]["id"]
                                 for e in m.get("entities", [])
@@ -242,10 +267,9 @@ class Bot:
                             session = self._session(actor)
                             if len(set(mentions)) == 1 and session and session["mode"] == "wizard":
                                 f = fields(session["kind"], session["data"])[session["step"]]
-                                if f.key == "contactInput":
-                                    session["data"].update(userId=mentions[0], sharedContact=True)
-                                    self._save_session(actor, session)
-                            self.message(actor, str(m.get("text", "")))
+                                if f.key == "userId":
+                                    message_text = str(mentions[0])
+                            self.message(actor, message_text)
             except DomainError as error:
                 safe = str(error)
                 if error.code == "forbidden":
@@ -394,6 +418,44 @@ class Bot:
                 "Кнопка от другого шага устарела",
             )
             return self.answer_wizard(actor, c)
+        if action in {"contact_options", "contact_mode"}:
+            session = self._session(actor)
+            require(
+                session
+                and session["mode"] == "wizard"
+                and session["nonce"] == a
+                and str(session["step"]) == b,
+                "Кнопка другого шага устарела",
+            )
+            self.i.authorize(actor, "admin" if session["kind"] == "loan_details" else "operator")
+            all_fields = fields(session["kind"], session["data"])
+            require(
+                all_fields[session["step"]].key in {"phone", "userId"},
+                "Выбор контакта доступен на шаге телефона или ID",
+            )
+            if action == "contact_options":
+                return self.send(
+                    actor,
+                    "Вместо телефона можно указать Telegram ID получателя.",
+                    [
+                        [button("Использовать Telegram ID", f"contact_mode:{a}:{b}:id")],
+                        [button("Использовать телефон", f"contact_mode:{a}:{b}:phone")],
+                    ],
+                )
+            require(c in {"id", "phone"}, "Выберите телефон или Telegram ID")
+            identifier = session["data"].get("userId")
+            for key in ("phone", "userId", "contactInput", "telegram", "sharedContact"):
+                session["data"].pop(key, None)
+            session["data"]["contactMethod"] = "telegram_id" if c == "id" else "phone"
+            if c == "id" and valid_id(identifier):
+                session["data"]["userId"] = identifier
+                self.send(actor, f"Используется Telegram ID: {identifier}")
+            session["nonce"] = uuid()[:8]
+            contact_start = next(n for n, f in enumerate(all_fields) if f.key == "phone")
+            session["visited"] = [n for n in session["visited"] if n < contact_start]
+            session["step"] = contact_start
+            self._save_session(actor, session)
+            return self.ask(actor)
         if action == "back":
             session = self._session(actor)
             require(session and (not a or a == session.get("nonce")), "Кнопка шага устарела")
@@ -510,11 +572,14 @@ class Bot:
             {
                 "mode": "wizard",
                 "kind": kind,
-                "data": data or {},
+                "data": {
+                    **({"contactMethod": "phone"} if kind in CONTACT_WIZARDS else {}),
+                    **(data or {}),
+                },
                 "step": 0,
                 "visited": [],
                 "nonce": uuid()[:8],
-                "dialogVersion": 2,
+                "dialogVersion": 3,
             },
         )
         if kind in {"return", "replace", "resolve_found", "inventory_check"}:
@@ -528,11 +593,13 @@ class Bot:
         session = self._session(actor)
         require(session and session["mode"] == "wizard", "Начните диалог заново")
         all_fields = fields(session["kind"], session["data"])
-        while (
-            session["step"] < len(all_fields)
-            and all_fields[session["step"]].when
-            and not all_fields[session["step"]].when(session["data"])
-        ):
+        while session["step"] < len(all_fields):
+            current = all_fields[session["step"]]
+            if not (current.when and not current.when(session["data"])):
+                if current.key not in session["data"]:
+                    break
+                if session["step"] not in session["visited"]:
+                    session["visited"].append(session["step"])
             session["step"] += 1
         self._save_session(actor, session)
         if session["step"] >= len(all_fields):
@@ -544,6 +611,10 @@ class Bot:
                 for value, label in (f.choices or {}).items()
             ]
         )
+        if f.key in {"phone", "userId"}:
+            buttons.append(
+                [button("Дополнительно", f"contact_options:{session['nonce']}:{session['step']}")]
+            )
         buttons.append(
             [
                 button("Назад", f"back:{session['nonce']}:{session['step']}"),
@@ -571,17 +642,24 @@ class Bot:
         all_fields = fields(kind, session["data"])
         require(session["step"] < len(all_fields), "Диалог уже завершён")
         f = all_fields[session["step"]]
+        if f.key == "userId" and not value.strip().isdigit():
+            resolved = resolve(self.s, contact(value))
+            require(
+                resolved.get("userId"),
+                "Введите числовой Telegram ID: для этого @ника ID неизвестен",
+            )
+            value = str(resolved["userId"])
+            if resolved.get("telegram"):
+                session["data"]["telegram"] = resolved["telegram"]
         try:
             session["data"][f.key] = f.parse(value)
         except (ValueError, OverflowError):
             raise DomainError("Неверный формат значения") from None
-        if f.key == "contactInput":
+        if f.key == "phone":
             if not session["data"].pop("sharedContact", False):
                 session["data"].pop("userId", None)
-            resolved = resolve(self.s, contact_from(session["data"]))
-            if resolved.get("userId"):
-                session["data"]["userId"] = resolved["userId"]
-                self.send(actor, f"Telegram ID подставлен: {resolved['userId']}")
+                session["data"].pop("telegram", None)
+            session["data"].pop("contactInput", None)
         session["visited"].append(session["step"])
         session["step"] += 1
         self._save_session(actor, session)
@@ -700,6 +778,7 @@ class Bot:
             "campaignId",
             "loanId",
             "dialogVersion",
+            "contactInput",
         }
         lines = [
             f"{FIELD_LABELS.get(k, k)}: {display(v)}" for k, v in data.items() if k not in hidden
@@ -739,6 +818,9 @@ class Bot:
 
     def confirm(self, actor, identifier):
         self.i.authorize(actor)
+        session = self._session(actor)
+        if session and session.get("replacedDraft") == identifier and session["mode"] == "wizard":
+            return self.ask(actor)
         draft = self.s.get_draft(actor, identifier, self.i.now())
         if draft["kind"] == "colors":
             self.i.authorize(actor, "admin")
@@ -763,6 +845,19 @@ class Bot:
         require(draft["kind"] == "confirm", "Неверное подтверждение")
         p, key = draft["data"], "dialog:" + identifier
         if p["kind"] == "operation":
+            cmd = p["command"]
+            if cmd["kind"] in CONTACT_WIZARDS and not self.s.get(
+                "SELECT 1 FROM requests WHERE key=?", key
+            ):
+                details = (
+                    (cmd.get("recipient") or {}).get("contact")
+                    if cmd["kind"] in {"issue", "transfer"}
+                    else cmd.get("contact")
+                )
+                require(
+                    (details or {}).get("method") in {"phone", "telegram_id"},
+                    "Укажите телефон или выберите Telegram ID через «Дополнительно». Продолжите команду: /resume",
+                )
             result = self.i.execute(actor, key, p["command"])
             self._complete(actor, identifier)
             pending = self.s.get("SELECT state FROM outbox WHERE router_id=?", result["routerId"])

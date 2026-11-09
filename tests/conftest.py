@@ -24,7 +24,12 @@ def person(name="Тестовый получатель"):
         "name": name,
         "group": "ТЕСТ-01",
         "admissionYear": 2026,
-        "contact": {"raw": "", "phone": None, "telegram": None, "userId": None},
+        "contact": {
+            "raw": "+70000000000",
+            "phone": "+70000000000",
+            "telegram": None,
+            "userId": None,
+        },
     }
 
 
@@ -43,17 +48,20 @@ def add(ctx, inventory="TEST-01", **more):
 
 
 def issue(ctx, identifier, **more):
+    recipient = more.get("recipient", person())
+    if "contact" not in recipient:
+        recipient = {**recipient, "contact": person()["contact"]}
     return ctx.i.execute(
         2,
         key(),
         {
             "kind": "issue",
             "routerId": identifier,
-            "recipient": person(),
             "place": place("101", floor="1", section="А"),
             "dueAt": "2027-07-01",
             "collectionEligible": True,
             **more,
+            "recipient": recipient,
         },
     )
 

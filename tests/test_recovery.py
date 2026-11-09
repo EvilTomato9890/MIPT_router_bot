@@ -76,7 +76,7 @@ def test_undo_contact_edit_restores_original_private_state(ctx):
             "kind": "loan_details",
             "routerId": identifier,
             "recipientKind": "person",
-            "contact": contact("@different_user"),
+            "contact": contact("@different_user +70000000001"),
             "admissionYear": 2026,
             "issuedAt": "2027-06-01",
             "collectionEligible": True,
@@ -99,7 +99,7 @@ def test_undo_contact_edit_restores_original_private_state(ctx):
 
 def test_undo_never_resurrects_purged_contacts(ctx):
     identifier = add(ctx)
-    issue(ctx, identifier, recipient={**person(), "contact": contact("@private_user")})
+    issue(ctx, identifier, recipient={**person(), "contact": contact("@private_user +70000000000")})
     returned = receive(ctx, identifier)
     ctx.clock.at += timedelta(days=400)
     assert ctx.i.purge_contacts(1, 365, key())["count"] == 1
@@ -125,7 +125,7 @@ def test_collection_closure_is_not_physical_return(ctx, kind):
     command = {"kind": kind, "routerId": identifier, "reason": "Изменение"}
     if kind == "transfer":
         command.update(
-            recipient={"kind": "organization", "name": "Клуб"},
+            recipient={"kind": "organization", "name": "Клуб", "contact": person()["contact"]},
             place=place("Клуб"),
             dueAt="2027-07-01",
         )
@@ -360,7 +360,7 @@ def test_unknown_username_never_fabricates_id_and_confirmed_pair_is_reused(ctx):
     assert resolve(ctx.s, contact("@renamed_user"))["userId"] == 300
 
 
-def test_short_issue_dialog_autofills_id_and_shared_contact(ctx):
+def test_short_issue_dialog_can_choose_known_id_and_share_phone(ctx):
     identifier = add(ctx)
     observe(ctx.s, {"id": 100, "username": "known_user"}, ctx.clock.at)
     bot, telegram = ui(ctx)
@@ -369,7 +369,7 @@ def test_short_issue_dialog_autofills_id_and_shared_contact(ctx):
         recipientKind="person",
         recipientName="Тест",
         admissionYear="2026",
-        contactInput="@known_user",
+        userId="@known_user",
         placeName="101",
         dueAt="2027-07-01",
     )
@@ -377,9 +377,15 @@ def test_short_issue_dialog_autofills_id_and_shared_contact(ctx):
     while bot._session(2)["mode"] == "wizard":
         state = bot._session(2)
         f = fields(state["kind"], state["data"])[state["step"]]
+        if f.key == "phone":
+            bot.handle(callback(2, f"contact_options:{state['nonce']}:{state['step']}"))
+            choose = telegram.messages[-1]["markup"]["inline_keyboard"][0][0]["callback_data"]
+            bot.handle(callback(2, choose))
+            state = bot._session(2)
+            f = fields(state["kind"], state["data"])[state["step"]]
         answered.append(f.key)
         bot.handle(message(2, values[f.key]))
-    assert len(answered) == 6 and "userId" not in answered
+    assert len(answered) == 6 and "userId" in answered and "phone" not in answered
     bot.handle(callback(2, confirm_button(telegram)))
     assert ctx.i.get(1, identifier)["loan"]["recipient"]["contact"]["userId"] == 100
     second = add(ctx, "SHARED")
@@ -396,7 +402,7 @@ def test_short_issue_dialog_autofills_id_and_shared_contact(ctx):
 @pytest.mark.parametrize("other_changed", [False, True])
 def test_universal_undo_replacement_is_atomic_for_both_devices(ctx, other_changed):
     old, new = add(ctx, "OLD"), add(ctx, "NEW")
-    issue(ctx, old, recipient={**person(), "contact": contact("@original_user")})
+    issue(ctx, old, recipient={**person(), "contact": contact("@original_user +70000000000")})
     operation = ctx.i.execute(
         2,
         key(),
@@ -482,9 +488,9 @@ def test_old_python_wizard_answers_are_migrated_without_reset(ctx):
     bot.handle(message(2, "/resume"))
     session = bot._session(2)
     assert session["data"]["recipientName"] == "Имя"
-    assert "@old_user" in session["data"]["contactInput"]
-    assert fields("issue", session["data"])[session["step"]].key == "userId"
-    assert "ID" in telegram.messages[-1]["text"]
+    assert session["data"]["phone"] == "+70000000000" and session["data"]["telegram"] == "old_user"
+    assert fields("issue", session["data"])[session["step"]].key == "placeName"
+    assert "Место" in telegram.messages[-1]["text"]
 
 
 def test_stale_switch_button_never_discards_a_later_command(ctx):

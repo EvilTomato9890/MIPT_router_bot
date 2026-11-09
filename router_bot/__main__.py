@@ -39,7 +39,11 @@ def demo():
             {
                 "kind": "issue",
                 "routerId": result["routerId"],
-                "recipient": {"kind": "person", "name": "Тестовый получатель"},
+                "recipient": {
+                    "kind": "person",
+                    "name": "Тестовый получатель",
+                    "contact": {"raw": "+70000000000", "phone": "+70000000000"},
+                },
                 "place": place("Тестовая 101"),
                 "dueAt": "2027-07-01",
             },

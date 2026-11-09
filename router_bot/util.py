@@ -108,6 +108,16 @@ def iso_date(value, allow_empty=False):
     return value
 
 
+def phone_number(value):
+    value = str(value or "").strip()
+    digits = re.sub(r"[ ()-]", "", value)
+    require(
+        re.fullmatch(r"\+?\d{10,15}", digits),
+        "Введите телефон из 10–15 цифр, например +79991234567. Вместо телефона можно выбрать Telegram ID через «Дополнительно».",
+    )
+    return digits
+
+
 def contact(raw=""):
     raw = str(raw or "")
     username = re.search(r"(?:@|t\.me/)([a-zA-Z][a-zA-Z0-9_]{4,31})", raw)
