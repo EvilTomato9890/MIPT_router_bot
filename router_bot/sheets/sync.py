@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from datetime import timedelta
 
+from ..contacts import resolve as resolve_contact
 from ..util import (
     DomainError,
     clone,
@@ -354,6 +355,8 @@ class Synchronizer:
 
     def _import(self, actor, values, entry, group, reason=None):
         d = decode(values)
+        if d["legacy"].get("contact"):
+            d["legacy"]["contact"] = resolve_contact(self.s, d["legacy"]["contact"])
         old_id = entry.get("routerId")
         r = self.i._router(old_id) if old_id else self.i._new({**d, "id": uuid()})
         before = self.i._bundle(r) if old_id else None
@@ -369,8 +372,19 @@ class Synchronizer:
             ):
                 previous = loan["recipient"].get("contact") or {}
                 parsed = contact(values.get("rawContact", ""))
-                parsed["userId"] = previous.get("userId")
-                loan["recipient"]["contact"] = parsed
+                same_username = bool(
+                    parsed["telegram"]
+                    and parsed["telegram"].casefold() == (previous.get("telegram") or "").casefold()
+                )
+                same_phone = bool(
+                    not parsed["telegram"]
+                    and not previous.get("telegram")
+                    and parsed["phone"]
+                    and parsed["phone"] == previous.get("phone")
+                )
+                if not parsed["userId"] and (same_username or same_phone):
+                    parsed["userId"] = previous.get("userId")
+                loan["recipient"]["contact"] = resolve_contact(self.s, parsed)
             if values.get("place", "") != loan["place"].get("name", ""):
                 loan["place"] = clone(d["place"])
             self.i._put_loan(loan)
@@ -416,17 +430,22 @@ class Synchronizer:
                     self.i._queue(r, uuid())
             self.s.set("sheets_display_day", day)
 
-    def flush(self):
+    def flush(self, *, limit=None, should_stop=None):
         result = dict(sent=0, blocked=0, failed=0)
-        for group in self.s.all(
+        groups = self.s.all(
             "SELECT DISTINCT group_id FROM outbox WHERE next_at<=?", stamp(self.i.now())
-        ):
+        )
+        for group in groups[:limit]:
+            if should_stop and should_stop():
+                break
             jobs = self.s.all("SELECT * FROM outbox WHERE group_id=?", group["group_id"])
             if any(j["state"] == "blocked" for j in jobs):
                 result["blocked"] += len(jobs)
                 continue
             try:
                 sheet = self.a.read()
+                if should_stop and should_stop():
+                    break
                 validate_sheet(sheet)
                 writes = []
                 for job in jobs:

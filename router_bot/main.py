@@ -1,6 +1,5 @@
 """Single-process polling runner with persistent maintenance state."""
 
-import json
 import logging
 import os
 import signal
@@ -20,7 +19,7 @@ from .sheets.google import GoogleSheets
 from .sheets.memory import MemorySheets
 from .sheets.sync import Synchronizer
 from .telegram import Telegram
-from .util import DomainError, local_clock, now_utc, parse_stamp, stamp
+from .util import DomainError, local_clock, now_utc, stamp
 
 log = logging.getLogger("router_bot")
 
@@ -93,10 +92,8 @@ def maintain(store, inventory, telegram, campaigns, c, sync=None, adapter=None):
             telegram.send(actor, message),
         )
     )
-    for row in store.all("SELECT user_id,data FROM sessions"):
-        updated = json.loads(row["data"]).get("updatedAt")
-        if not updated or parse_stamp(updated) + timedelta(minutes=30) < now:
-            store.run("DELETE FROM sessions WHERE user_id=?", row["user_id"])
+    # Unfinished commands survive maintenance and restarts. Expired short-lived
+    # confirmations can be rebuilt from their retained session answers.
     store.run("DELETE FROM drafts WHERE expires_at<?", stamp(now))
     admins = [r["user_id"] for r in store.all("SELECT user_id FROM roles WHERE role='admin'")]
     if c.retention_days and admins and store.setting("privacy_day") != day:
@@ -134,6 +131,34 @@ def maintain(store, inventory, telegram, campaigns, c, sync=None, adapter=None):
             store.set("sync_alert_day", day)
 
 
+def sheets_worker(c, stop, memory_adapter=None, *, now=now_utc):
+    """A separate connection keeps slow Google requests out of the polling loop."""
+    store = Store(c.db)
+    try:
+        inventory = Inventory(store, now=now)
+        adapter = memory_adapter if c.mode == "memory" else adapter_for(c)
+        sync = Synchronizer(inventory, adapter)
+        last_colors = 0
+        while not stop.is_set():
+            try:
+                sync.refresh_day()
+                sync.flush(limit=5, should_stop=stop.is_set)
+                if (
+                    not stop.is_set()
+                    and store.setting("colors_managed")
+                    and time.monotonic() - last_colors >= 30
+                ):
+                    last_colors = time.monotonic()
+                    plan = color_plan(adapter.read())
+                    if plan["changed"] and not stop.is_set():
+                        adapter.batch(plan["requests"])
+            except Exception:
+                log.warning("Обновление таблицы отложено; очередь сохранена.")
+            stop.wait(1)
+    finally:
+        store.close()
+
+
 def run():
     c = config()
     stop = threading.Event()
@@ -141,13 +166,19 @@ def run():
         signal.signal(getattr(signal, name), lambda *_: stop.set())
     with process_lock(c.db):
         store = Store(c.db)
+        worker = None
         try:
             migrate(store, c.backup_dir)
             inventory = Inventory(store, bootstrap_admin_id=c.admin)
             telegram, adapter = Telegram(c.token), adapter_for(c)
             sync = Synchronizer(inventory, adapter) if adapter else None
             colors = ColorRepair(inventory, adapter) if adapter else None
-            campaigns = Campaigns(inventory, time=c.reminder_time, offsets=c.reminder_offsets)
+            campaigns = Campaigns(inventory, time=c.reminder_time)
+            administrator = store.get(
+                "SELECT user_id FROM roles WHERE role='admin' ORDER BY user_id LIMIT 1"
+            )
+            if administrator:
+                campaigns.simplify(administrator["user_id"])
             bot = Bot(
                 inventory, telegram, sync=sync, colors=colors, campaigns=campaigns, mode=c.mode
             )
@@ -168,12 +199,20 @@ def run():
                 },
             )
             log.info("Бот запущен. Режим таблицы: %s", c.mode)
+            if adapter:
+                worker = threading.Thread(
+                    target=sheets_worker,
+                    args=(c, stop, adapter),
+                    name="sheets-sync",
+                )
+                worker.start()
             last_maintenance = 0
             while not stop.is_set():
                 if time.monotonic() - last_maintenance >= 30:
                     last_maintenance = time.monotonic()
-                    maintain(store, inventory, telegram, campaigns, c, sync, adapter)
+                    maintain(store, inventory, telegram, campaigns, c)
                 try:
+                    bot.t.flush()
                     updates = telegram.call(
                         "getUpdates",
                         {
@@ -195,4 +234,7 @@ def run():
                     log.warning("Telegram временно недоступен. Повтор через 5 секунд.")
                     stop.wait(5)
         finally:
+            stop.set()
+            if worker:
+                worker.join()
             store.close()

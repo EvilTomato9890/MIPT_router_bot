@@ -1,19 +1,21 @@
 """Private-chat Telegram interface. Rights are rechecked on every view and commit."""
 
 import json
-from datetime import timedelta
 
-from .dialogs import FIELD_LABELS, LABELS, command, fields
+from .contacts import observe, resolve
+from .delivery import Delivery
+from .dialogs import FIELD_LABELS, LABELS, command, contact_from, fields
 from .service import ADMIN_ACTIONS
 from .sheets.schema import LINKED
 from .util import (
     CONDITION,
     STATUS,
     DomainError,
+    contact_text,
     csv_cell,
     equal,
+    local_clock,
     overdue,
-    parse_stamp,
     require,
     stable,
     stamp,
@@ -83,7 +85,7 @@ def rows(items, size=2):
 
 class Bot:
     def __init__(self, inventory, telegram, *, sync=None, colors=None, campaigns, mode="disabled"):
-        self.i, self.s, self.t = inventory, inventory.s, telegram
+        self.i, self.s, self.t = inventory, inventory.s, Delivery(inventory, telegram)
         self.sync, self.colors, self.c, self.mode = sync, colors, campaigns, mode
 
     def send(self, actor, message, buttons=None):
@@ -103,7 +105,23 @@ class Bot:
 
     def _session(self, actor):
         row = self.s.get("SELECT data FROM sessions WHERE user_id=?", actor)
-        return json.loads(row["data"]) if row else None
+        session = json.loads(row["data"]) if row else None
+        if session and session.get("mode") == "wizard" and session.get("dialogVersion") != 2:
+            data = session["data"]
+            if "phone" in data or "telegram" in data:
+                data["contactInput"] = contact_text(contact_from(data))
+            session.update(dialogVersion=2, step=0, visited=[], nonce=uuid()[:8])
+            while session["step"] < len(fields(session["kind"], data)):
+                f = fields(session["kind"], data)[session["step"]]
+                if f.when and not f.when(data):
+                    session["step"] += 1
+                    continue
+                if f.key not in data:
+                    break
+                session["visited"].append(session["step"])
+                session["step"] += 1
+            self._save_session(actor, session)
+        return session
 
     def _save_session(self, actor, data):
         self.s.run(
@@ -112,8 +130,77 @@ class Bot:
             stable({**data, "updatedAt": stamp(self.i.now())}),
         )
 
-    def _clear(self, actor):
+    def _clear(self, actor, cancel=False):
+        if cancel:
+            session = self._session(actor) or {}
+            if session.get("draftId"):
+                self.s.run("DELETE FROM drafts WHERE id=? AND user_id=?", session["draftId"], actor)
         self.s.run("DELETE FROM sessions WHERE user_id=?", actor)
+
+    def _offer_switch(self, actor, intent):
+        session = self._session(actor)
+        if not session or session["mode"] not in {"wizard", "confirm"}:
+            return False
+        identifier = self.s.draft(
+            actor, "switch", {**intent, "sessionNonce": session["nonce"]}, self.i.now()
+        )
+        self.send(
+            actor,
+            "Есть незавершённая команда. Введённые ответы сохранены.",
+            [
+                [button("Продолжить", "resume")],
+                [button("Отменить и начать новую", "switch:" + identifier)],
+            ],
+        )
+        return True
+
+    def resume(self, actor):
+        session = self._session(actor)
+        if not session:
+            return self.send(actor, "Незавершённых команд нет.", [[button("Меню", "menu")]])
+        if session["mode"] in {"wizard", "confirm"}:
+            kind = session["kind"]
+            self.i.authorize(
+                actor,
+                "observer"
+                if kind in READ_WIZARDS
+                else "admin"
+                if kind in ADMIN_WIZARDS
+                else "operator",
+            )
+        if session["mode"] == "confirm":
+            # Refresh an expired confirmation from the retained answers. The
+            # original versions still protect against intervening changes.
+            return self.finish(actor, session)
+        if session["mode"] == "wizard":
+            return self.ask(actor)
+        return self.send(actor, "Введите инвентарный номер или текст поиска.")
+
+    def _shared_contact(self, actor, shared):
+        session = self._session(actor)
+        require(session and session["mode"] == "wizard", "Сначала начните ввод контакта")
+        f = fields(session["kind"], session["data"])[session["step"]]
+        require(
+            f.key in {"contactInput", "userId"},
+            "Контакт можно отправить на шаге контакта или Telegram ID",
+        )
+        # Sharing a contact supplies a real user ID, not a username guess.
+        require(
+            f.key == "contactInput" or shared.get("user_id"),
+            "В этой карточке нет Telegram ID; введите ID или -",
+        )
+        if shared.get("user_id"):
+            session["data"]["userId"] = shared["user_id"]
+        elif f.key == "contactInput":
+            session["data"].pop("userId", None)
+        session["data"]["sharedContact"] = bool(shared.get("user_id")) and f.key == "contactInput"
+        self._save_session(actor, session)
+        return self.answer_wizard(
+            actor,
+            str(shared.get("phone_number") or "-")
+            if f.key == "contactInput"
+            else str(shared["user_id"]),
+        )
 
     def handle(self, update):
         cb = update.get("callback_query")
@@ -125,31 +212,49 @@ class Bot:
             if cb:
                 self.t.answer(cb["id"], "Работайте с ботом в личном чате")
             return
-        try:
-            self.i.authorize(actor)
-            if self.s.get("SELECT 1 FROM processed_updates WHERE id=?", update["update_id"]):
-                if cb:
-                    self.t.answer(cb["id"], "Уже обработано")
-                return
-            self.s.run("INSERT INTO processed_updates VALUES(?)", update["update_id"])
-            if cb:
-                self.t.answer(cb["id"])
-                self.callback(actor, cb.get("data", ""))
-            else:
-                self.message(actor, str(m.get("text", "")))
-        except Exception as error:
-            safe = (
-                str(error)
-                if isinstance(error, DomainError)
-                else "Не удалось выполнить запрос. Учёт сохранён; повторно откройте карточку."
-            )
-            if isinstance(error, DomainError) and error.code == "forbidden":
-                self._clear(actor)
-                safe = f"Нет доступа. Ваш Telegram ID: {actor}"
+        if cb:
             try:
-                self.t.send(actor, safe)
+                self.t.telegram.answer(cb["id"])
             except Exception:
                 pass
+        with self.s.transaction(), self.t.capture(actor):
+            if self.s.get("SELECT 1 FROM processed_updates WHERE id=?", update["update_id"]):
+                return True
+            observe(self.s, (cb or m).get("from"), self.i.now())
+            for entity in m.get("entities", []):
+                if entity.get("type") == "text_mention":
+                    observe(self.s, entity.get("user"), self.i.now())
+            try:
+                with self.s.transaction():
+                    self.i.authorize(actor)
+                    if cb:
+                        self.callback(actor, cb.get("data", ""))
+                    else:
+                        shared = m.get("contact")
+                        if shared:
+                            self._shared_contact(actor, shared)
+                        else:
+                            mentions = [
+                                e["user"]["id"]
+                                for e in m.get("entities", [])
+                                if e.get("type") == "text_mention" and e.get("user")
+                            ]
+                            session = self._session(actor)
+                            if len(set(mentions)) == 1 and session and session["mode"] == "wizard":
+                                f = fields(session["kind"], session["data"])[session["step"]]
+                                if f.key == "contactInput":
+                                    session["data"].update(userId=mentions[0], sharedContact=True)
+                                    self._save_session(actor, session)
+                            self.message(actor, str(m.get("text", "")))
+            except DomainError as error:
+                safe = str(error)
+                if error.code == "forbidden":
+                    self._clear(actor, cancel=True)
+                    safe = f"Нет доступа. Ваш Telegram ID: {actor}"
+                self.t.send(actor, safe)
+            self.s.run("INSERT INTO processed_updates VALUES(?)", update["update_id"])
+        self.t.flush()
+        return True
 
     def menu(self, actor):
         role = self.i.authorize(actor)
@@ -166,6 +271,8 @@ class Bot:
             ]
         if role == "admin":
             buttons.append(button("Настройки", "settings"))
+        if self._session(actor):
+            buttons.insert(0, button("Продолжить команду", "resume"))
         status = (
             "ДЕМОНСТРАЦИЯ: Google не подключён."
             if self.mode == "memory"
@@ -179,9 +286,15 @@ class Bot:
 
     def message(self, actor, message):
         self.i.authorize(actor)
-        if message in {"/start", "/menu", "/cancel", "Отмена"}:
-            self._clear(actor)
+        if message in {"/cancel", "Отмена"}:
+            self._clear(actor, cancel=True)
             return self.menu(actor)
+        if message in {"/start", "/menu"}:
+            return self.menu(actor)
+        if message == "/resume":
+            return self.resume(actor)
+        if message in {"/back", "Назад"}:
+            return self.back(actor)
         routes = {
             "/sync": self.sync_preview,
             "/repair_colors": self.color_preview,
@@ -195,7 +308,7 @@ class Bot:
         if message == "/help":
             return self.send(
                 actor,
-                "Меню: /menu\nПоиск: /find текст\nСписок: /list\nОтчёты: /reports\nЭкспорт: /export\nСбор: /collection\nАдминистратор: /settings, /sync, /repair_colors\nВ диалогах: «Назад», «Отмена». Учёт меняется только после подтверждения.",
+                "Меню: /menu\nПродолжить команду: /resume\nОтменить команду: /cancel\nПоиск: /find текст\nСписок: /list\nОтчёты: /reports\nЭкспорт: /export\nСбор: /collection\nАдминистратор: /settings, /sync, /repair_colors\nМеню сохраняет введённые ответы. Учёт меняется только после подтверждения.",
                 [[button("Меню", "menu")]],
             )
         if message == "/provision":
@@ -210,10 +323,8 @@ class Bot:
         session = self._session(actor)
         if not session:
             return self.menu(actor)
-        require(
-            parse_stamp(session["updatedAt"]) + timedelta(minutes=30) > self.i.now(),
-            "Диалог устарел. Начните заново.",
-        )
+        if session["mode"] == "confirm":
+            return self.resume(actor)
         if session["mode"] == "search":
             self._clear(actor)
             return self.show_list(actor, {"q": message})
@@ -230,19 +341,44 @@ class Bot:
         parts = callback.split(":")
         action, a, b, c = (parts + [""] * 4)[:4]
         if action == "menu":
-            self._clear(actor)
             return self.menu(actor)
+        if action == "resume":
+            return self.resume(actor)
+        if action == "cancel":
+            session = self._session(actor)
+            require(session and a and a == session.get("nonce"), "Кнопка отмены устарела")
+            self._clear(actor, cancel=True)
+            return self.menu(actor)
+        if action == "switch":
+            draft = self.s.get_draft(actor, a, self.i.now())
+            require(draft["kind"] == "switch", "Неверная команда")
+            session = self._session(actor)
+            require(
+                session and session.get("nonce") == draft["data"]["sessionNonce"],
+                "Кнопка смены команды устарела",
+            )
+            self._clear(actor, cancel=True)
+            intent = draft["data"]
+            if "kind" in intent:
+                return self.start(actor, intent["kind"], intent.get("data"), force=True)
+            return self.callback(actor, intent["callback"])
+        if action in {"search", "select"} and self._offer_switch(actor, {"callback": callback}):
+            return
         if action == "search":
-            self._save_session(actor, {"mode": "search"})
+            nonce = uuid()[:8]
+            self._save_session(actor, {"mode": "search", "nonce": nonce})
             return self.send(
                 actor,
                 "Введите номер, MAC, модель, ФИО, группу или место.",
-                [[button("Отмена", "menu")]],
+                [[button("Отмена", "cancel:" + nonce)]],
             )
         if action == "select":
             self.i.authorize(actor, "operator")
-            self._save_session(actor, {"mode": "select", "kind": a})
-            return self.send(actor, "Введите инвентарный номер.", [[button("Отмена", "menu")]])
+            nonce = uuid()[:8]
+            self._save_session(actor, {"mode": "select", "kind": a, "nonce": nonce})
+            return self.send(
+                actor, "Введите инвентарный номер.", [[button("Отмена", "cancel:" + nonce)]]
+            )
         if action == "start":
             return self.start(actor, a)
         if action == "act":
@@ -259,11 +395,18 @@ class Bot:
             )
             return self.answer_wizard(actor, c)
         if action == "back":
+            session = self._session(actor)
+            require(session and (not a or a == session.get("nonce")), "Кнопка шага устарела")
+            require(not b or b == str(session["step"]), "Кнопка другого шага устарела")
             return self.back(actor)
         if action == "confirm":
             return self.confirm(actor, a)
         if action == "card":
             return self.card(actor, a)
+        if action == "extra":
+            return self.card(actor, a, advanced=True)
+        if action == "archive":
+            return self.campaign_list(actor, archive=True)
         if action == "hist":
             return self.history(actor, a, int(b or 0))
         if action == "list":
@@ -351,7 +494,7 @@ class Bot:
             )
         raise DomainError("Кнопка устарела. Откройте меню.")
 
-    def start(self, actor, kind, data=None):
+    def start(self, actor, kind, data=None, *, force=False):
         self.i.authorize(
             actor,
             "observer"
@@ -360,6 +503,8 @@ class Bot:
             if kind in ADMIN_WIZARDS
             else "operator",
         )
+        if not force and self._offer_switch(actor, {"kind": kind, "data": data or {}}):
+            return
         self._save_session(
             actor,
             {
@@ -369,6 +514,7 @@ class Bot:
                 "step": 0,
                 "visited": [],
                 "nonce": uuid()[:8],
+                "dialogVersion": 2,
             },
         )
         if kind in {"return", "replace", "resolve_found", "inventory_check"}:
@@ -398,7 +544,12 @@ class Bot:
                 for value, label in (f.choices or {}).items()
             ]
         )
-        buttons.append([button("Назад", "back"), button("Отмена", "menu")])
+        buttons.append(
+            [
+                button("Назад", f"back:{session['nonce']}:{session['step']}"),
+                button("Отмена", "cancel:" + session["nonce"]),
+            ]
+        )
         return self.send(
             actor,
             f"{LABELS[session['kind']]} · шаг {len(session['visited']) + 1}\n{f.prompt}",
@@ -424,6 +575,13 @@ class Bot:
             session["data"][f.key] = f.parse(value)
         except (ValueError, OverflowError):
             raise DomainError("Неверный формат значения") from None
+        if f.key == "contactInput":
+            if not session["data"].pop("sharedContact", False):
+                session["data"].pop("userId", None)
+            resolved = resolve(self.s, contact_from(session["data"]))
+            if resolved.get("userId"):
+                session["data"]["userId"] = resolved["userId"]
+                self.send(actor, f"Telegram ID подставлен: {resolved['userId']}")
         session["visited"].append(session["step"])
         session["step"] += 1
         self._save_session(actor, session)
@@ -431,7 +589,10 @@ class Bot:
 
     def back(self, actor):
         session = self._session(actor)
-        require(session and session["mode"] == "wizard", "Начните диалог заново")
+        require(session and session["mode"] in {"wizard", "confirm"}, "Начните диалог заново")
+        if session["mode"] == "confirm":
+            self.s.run("DELETE FROM drafts WHERE id=?", session["draftId"])
+            session["mode"] = "wizard"
         if not session["visited"]:
             self._clear(actor)
             return self.menu(actor)
@@ -486,6 +647,16 @@ class Bot:
                 "kind": "campaign",
                 "data": {
                     **old,
+                    **(
+                        {
+                            "name": f"Сбор набора {data['admissionYear']}",
+                            "startsAt": local_clock(self.i.now())["day"],
+                            "hours": "По договорённости",
+                            "instruction": "Сверьте номер и оформите физический приём в боте.",
+                        }
+                        if not old
+                        else {}
+                    ),
                     **data,
                     "responsibleIds": responsible,
                     **({"expectedVersion": old["version"]} if old else {}),
@@ -503,9 +674,13 @@ class Bot:
                     "reason": data["reason"],
                 },
             }
-        if kind == "queue_action" and data["action"] in {"exclude", "assign", "priority"}:
+        if kind == "queue_action" and data["action"] in {"exclude", "include"}:
             self.i.authorize(actor, "admin")
         warning = ""
+        if kind == "correct" and not self.s.get(
+            "SELECT 1 FROM event_states WHERE event_id=?", data["eventId"]
+        ):
+            warning = "У старой операции нет снимка контактов. Откат сохранит текущие контакты; прежние при необходимости уточните отдельно."
         if kind in {"issue", "transfer"}:
             warning = "\n".join(
                 self.i.warnings(
@@ -513,7 +688,9 @@ class Bot:
                 )
             )
         identifier = self.s.draft(actor, "confirm", prepared, self.i.now())
-        self._clear(actor)
+        if session.get("draftId"):
+            self.s.run("DELETE FROM drafts WHERE id=?", session["draftId"])
+        self._save_session(actor, {**session, "mode": "confirm", "draftId": identifier})
         hidden = {
             "expected",
             "routerId",
@@ -522,23 +699,42 @@ class Bot:
             "entryIndex",
             "campaignId",
             "loanId",
+            "dialogVersion",
         }
         lines = [
             f"{FIELD_LABELS.get(k, k)}: {display(v)}" for k, v in data.items() if k not in hidden
         ]
         if data.get("routerId"):
             lines.insert(0, "Роутер: " + self.i.get(actor, data["routerId"])["inventory"])
+        if kind == "correct":
+            event = self.s.get(
+                "SELECT * FROM events WHERE id=? AND object_id=?", data["eventId"], data["routerId"]
+            )
+            if event:
+                for linked in self.i._correction_events(event):
+                    if linked["object_id"] != data["routerId"]:
+                        lines.append(
+                            "Связанный откат: "
+                            + self.i.get(actor, linked["object_id"])["inventory"]
+                        )
         summary = LABELS[kind] + " — проверьте итог\n" + "\n".join(lines)
         if warning:
             summary += (
                 "\nВозможные другие выдачи человеку / в то же место (совпадение имени не доказывает личность):\n"
-                + warning
-            )
+                if kind in {"issue", "transfer"}
+                else "\n"
+            ) + warning
         self.send_chunks(actor, summary)
         return self.send(
             actor,
             "Применить показанные изменения?",
-            [[button("Подтвердить", "confirm:" + identifier), button("Отмена", "menu")]],
+            [
+                [button("Подтвердить", "confirm:" + identifier)],
+                [
+                    button("Назад", f"back:{session['nonce']}:{session['step']}"),
+                    button("Отмена", "cancel:" + session["nonce"]),
+                ],
+            ],
         )
 
     def confirm(self, actor, identifier):
@@ -568,8 +764,7 @@ class Bot:
         p, key = draft["data"], "dialog:" + identifier
         if p["kind"] == "operation":
             result = self.i.execute(actor, key, p["command"])
-            if self.sync:
-                self.sync.flush()
+            self._complete(actor, identifier)
             pending = self.s.get("SELECT state FROM outbox WHERE router_id=?", result["routerId"])
             self.send(
                 actor,
@@ -586,12 +781,15 @@ class Bot:
                 None if data["role"] == "revoke" else data["role"],
                 "role:" + identifier,
             )
+            self._complete(actor, identifier)
             return self.t.send(actor, "Права обновлены. Отзыв действует сразу.")
         if p["kind"] == "campaign":
             result = self.c.save(actor, "campaign:" + identifier, data)
+            self._complete(actor, identifier)
             return self.campaign_preview(actor, result["id"])
         if p["kind"] == "queue_action":
             self.c.member(actor, "queue:" + identifier, data["campaignId"], data["loanId"], data)
+            self._complete(actor, identifier)
             return self.send(
                 actor,
                 "Действие записано. Срок меняет только администратор; приём — только после физического возврата.",
@@ -607,12 +805,18 @@ class Bot:
                 "values": {f: data[f] for f in data.get("customFields", [])},
             }
             self.s.run("UPDATE drafts SET data=? WHERE id=?", stable(target["data"]), target["id"])
+            self._complete(actor, identifier)
             return self.send(
                 actor,
                 "Решение сохранено в просмотре. Примените проверенный набор.",
                 [[button("К просмотру", "sv:" + target["id"] + ":0")]],
             )
         raise DomainError("Неизвестная операция")
+
+    def _complete(self, actor, identifier):
+        session = self._session(actor)
+        if session and session.get("draftId") == identifier:
+            self._clear(actor)
 
     def show_list(self, actor, filters=None, page=0, identifier=None):
         all_rows = self.i.list(actor, filters)
@@ -639,7 +843,7 @@ class Bot:
         buttons.append([button("Фильтры", "start:filters"), button("Меню", "menu")])
         return self.send(actor, f"Найдено: {len(all_rows)}. Страница {page + 1}.", buttons)
 
-    def card(self, actor, identifier):
+    def card(self, actor, identifier, advanced=False):
         r = self.i.get(actor, identifier)
         role, loan = self.i.authorize(actor), r["loan"]
         loc = (loan or r).get("place" if loan else "storage") or {}
@@ -680,18 +884,19 @@ class Bot:
             )
         buttons = [button("История", "hist:" + r["id"] + ":0")]
         if role != "observer":
-            kinds = ["move", "condition", "note"]
-            if r["status"] == "stored":
+            kinds = ["move"] if advanced else ["condition", "note"]
+            if r["status"] == "stored" and not advanced:
                 kinds.append("issue")
-            if r["status"] in {"stored", "issued", "unknown"}:
+            if r["status"] in {"stored", "issued", "unknown"} and not advanced:
                 kinds.append("lost")
             if loan:
-                kinds.append("return")
-                if r["status"] == "issued":
+                if not advanced:
+                    kinds.append("return")
+                if r["status"] == "issued" and advanced:
                     kinds += ["transfer", "replace"]
-            if r["status"] == "lost":
+            if r["status"] == "lost" and not advanced:
                 kinds.append("found")
-            if role == "admin":
+            if role == "admin" and advanced:
                 kinds += ["vip", "correct"]
                 if r["status"] != "written_off":
                     kinds.append("write_off")
@@ -702,6 +907,12 @@ class Bot:
                 if r["status"] == "lost" and r.get("found"):
                     kinds.append("resolve_found")
             buttons += [button(LABELS[k], f"act:{k}:{r['id']}") for k in kinds]
+            buttons.append(
+                button(
+                    "К основным действиям" if advanced else "Дополнительно",
+                    ("card:" if advanced else "extra:") + r["id"],
+                )
+            )
         self.send_chunks(actor, "\n".join(lines))
         return self.send(actor, "Действия", rows(buttons) + [[button("Меню", "menu")]])
 
@@ -808,7 +1019,7 @@ class Bot:
                 [button("Доступ", "start:role")],
                 [button("Синхронизировать из таблицы", "sync")],
                 [button("Восстановить раскраску", "colors")],
-                [button("Создать кампанию", "start:campaign"), button("Сбор", "campaigns")],
+                [button("Настроить сбор", "start:campaign"), button("Сбор", "campaigns")],
                 [button("Меню", "menu")],
             ],
         )
@@ -912,16 +1123,22 @@ class Bot:
             [[button("Применить", "confirm:" + p["id"]), button("Отмена", "menu")]],
         )
 
-    def campaign_list(self, actor):
+    def campaign_list(self, actor, archive=False):
+        campaigns = self.c.list(actor)
+        if not archive:
+            active = [c for c in campaigns if c["active"]]
+            campaigns = active or campaigns[-1:]
         buttons = [
             [button(c["name"] + (" · активна" if c["active"] else " · проект"), "queue:" + c["id"])]
-            for c in self.c.list(actor)
+            for c in campaigns
         ]
         if self.i.authorize(actor) == "admin":
-            buttons.append([button("Создать кампанию", "start:campaign")])
+            buttons.append([button("Настроить новый сбор", "start:campaign")])
+        if not archive and len(self.c.list(actor)) > len(campaigns):
+            buttons.append([button("Предыдущие сборы", "archive")])
         return self.send(
             actor,
-            "Кампании сбора. VIP сам по себе не исключает из возврата.",
+            "Ежегодный сбор. Одновременно работает один сбор; ответственные получают одну сводку в день.",
             buttons + [[button("Меню", "menu")]],
         )
 
@@ -950,7 +1167,7 @@ class Bot:
         self.send_chunks(actor, text)
         return self.send(
             actor,
-            "Запускайте только с согласованными датами, регламентом и ответственными.",
+            "При запуске предыдущий активный сбор будет завершён. Его история сохранится.",
             [
                 [
                     button("Подтвердить запуск", "confirm:" + d),
@@ -979,7 +1196,7 @@ class Bot:
         )
         part = queue[page * 4 : page * 4 + 4]
         lines = [
-            f"План: {stats['plan']}; принято: {stats['returned']}; осталось: {stats['remaining']}; просрочки: {stats['overdue']}; исключения: {stats['excluded']}; утрата: {stats['lost']}."
+            f"Выдач в сборе: {stats['plan']}; физически принято: {stats['returned']}; закрыто без приёма: {stats['closedWithoutReturn']}; осталось: {stats['remaining']}; просрочки: {stats['overdue']}; исключения: {stats['excluded']}; утрата: {stats['lost']}."
         ]
         buttons = []
         for index, x in enumerate(part):
@@ -998,7 +1215,7 @@ class Bot:
             if role != "observer":
                 actions += [
                     button("Принят", "act:return:" + x["router"]["id"]),
-                    button("Действие", f"qa:{draft}:{page * 4 + index}"),
+                    button("Примечание / исключение", f"qa:{draft}:{page * 4 + index}"),
                 ]
             buttons.append(actions)
         self.send_chunks(actor, "\n\n".join(lines))
@@ -1016,6 +1233,6 @@ class Bot:
             )
         return self.send(
             actor,
-            "Обещание сдать и «Не застали» не меняют статус или срок.",
+            "Примечания не меняют срок и не подтверждают приём.",
             buttons + [[button("Меню", "menu")]],
         )

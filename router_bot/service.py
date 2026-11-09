@@ -4,6 +4,7 @@ import json
 import unicodedata
 from datetime import timedelta
 
+from .contacts import resolve as resolve_contact
 from .util import (
     CONDITION,
     STATUS,
@@ -322,6 +323,8 @@ class Inventory:
             )
         if (r.get("contact") or {}).get("userId"):
             require(valid_id(r["contact"]["userId"]), "Неверный подтверждённый Telegram ID")
+        if r.get("contact"):
+            r["contact"] = resolve_contact(self.s, r["contact"])
         return r
 
     def _validate(self, r):
@@ -408,6 +411,55 @@ class Inventory:
     def _bundle(self, r):
         return {"router": clone(r), "loans": self._loans(r["id"])}
 
+    def _correction_events(self, event):
+        group = self.s.get("SELECT operation_id FROM event_groups WHERE event_id=?", event["id"])
+        return (
+            self.s.all(
+                "SELECT e.* FROM events e JOIN event_groups g ON e.id=g.event_id WHERE g.operation_id=?",
+                group["operation_id"],
+            )
+            if group
+            else [event]
+        )
+
+    def _restore(self, r, event, at):
+        latest = self.s.get(
+            "SELECT id FROM events WHERE object_id=? ORDER BY rowid DESC LIMIT 1", r["id"]
+        )
+        require(latest["id"] == event["id"], "Есть зависимые события: слепой откат запрещён")
+        require(
+            event["action"] != "add",
+            "Добавление сохраняется в истории; ошибочную карточку спишите с причиной",
+        )
+        snapshot = self.s.get("SELECT before_json FROM event_states WHERE event_id=?", event["id"])
+        prior = json.loads((snapshot or event)["before_json"])
+        require(prior and prior.get("router"), "Нет предыдущего состояния")
+        ids = {loan["id"] for loan in prior["loans"]}
+        for loan in self._loans(r["id"]):
+            if loan["id"] not in ids:
+                loan.update(open=False, closedKind="correction", closedAt=at)
+                self._put_loan(loan)
+        for loan in prior["loans"]:
+            current = self.s.get("SELECT data FROM loans WHERE id=?", loan["id"])
+            saved = json.loads(current["data"]) if current else {}
+            if saved.get("contactsPurgedAt"):
+                loan["recipient"]["contact"] = None
+                loan["contactsPurgedAt"] = saved["contactsPurgedAt"]
+            elif (
+                not snapshot
+                and "contact" not in loan["recipient"]
+                and (saved.get("recipient") or {}).get("contact")
+            ):
+                loan["recipient"]["contact"] = saved["recipient"]["contact"]
+            self._put_loan(loan)
+        if not snapshot and "contact" not in prior["router"].get("legacy", {}):
+            prior["router"].setdefault("legacy", {})["contact"] = r.get("legacy", {}).get("contact")
+        restored = {**prior["router"], "version": r["version"]}
+        restored.pop("kit", None)
+        if restored.get("storage"):
+            restored["storage"].pop("type", None)
+        return restored
+
     def execute(self, actor, key, command):
         minimum = "admin" if command["kind"] in ADMIN_ACTIONS else "operator"
         self.authorize(actor, minimum)
@@ -423,6 +475,7 @@ class Inventory:
                 )
             r = self._new(d) if d["kind"] == "add" else self._router(d["routerId"])
             before, other, extra_before = self._bundle(r), None, None
+            extra_correction = None
             reason, correction = text(d["reason"]) if d.get("reason") else None, None
             match d["kind"]:
                 case "add":
@@ -622,50 +675,48 @@ class Inventory:
                         "SELECT * FROM events WHERE id=? AND object_id=?", d.get("eventId"), r["id"]
                     )
                     require(event, "Исходная операция не найдена")
-                    latest = self.s.get(
-                        "SELECT id FROM events WHERE object_id=? ORDER BY rowid DESC LIMIT 1",
-                        r["id"],
-                    )
+                    related = self._correction_events(event)
                     require(
-                        latest["id"] == event["id"], "Есть зависимые события: слепой откат запрещён"
+                        event["action"] != "replace" or len(related) == 2,
+                        "У старой замены нет связанных снимков; исправьте её предметными действиями",
                     )
-                    require(
-                        event["action"] not in {"add", "replace", "Импорт из таблицы"},
-                        "Связанную операцию исправляйте предметным действием",
-                    )
-                    prior = json.loads(event["before_json"])
-                    require(prior and prior.get("router"), "Нет предыдущего состояния")
-                    ids = {loan["id"] for loan in prior["loans"]}
-                    for loan in self._loans(r["id"]):
-                        if loan["id"] not in ids:
-                            loan.update(open=False, closedKind="correction", closedAt=at)
-                            self._put_loan(loan)
-                    for loan in prior["loans"]:
-                        current = self.s.get("SELECT data FROM loans WHERE id=?", loan["id"])
-                        saved = json.loads(current["data"]) if current else {}
-                        if "contact" not in loan["recipient"] and (
-                            saved.get("recipient") or {}
-                        ).get("contact"):
-                            loan["recipient"]["contact"] = saved["recipient"]["contact"]
-                        self._put_loan(loan)
-                    r = {**prior["router"], "version": r["version"]}
-                    # Historical events keep their original content; restored live data uses the new model.
-                    r.pop("kit", None)
-                    if r.get("storage"):
-                        r["storage"].pop("type", None)
+                    require(len(related) <= 2, "Связанная операция требует отдельного разбора")
+                    for linked in related:
+                        if linked["object_id"] != r["id"]:
+                            other = self._router(linked["object_id"])
+                            extra_before = self._bundle(other)
+                            other = self._restore(other, linked, at)
+                            extra_correction = linked["id"]
+                    r = self._restore(r, event, at)
                     correction = event["id"]
                 case _:
                     require(False, "Неизвестная операция")
             self._validate(r)
             self._save(r, group)
             event_id = self.s.event(
-                actor, r["id"], d["kind"], before, self._bundle(r), reason, correction, at
+                actor,
+                r["id"],
+                d["kind"],
+                before,
+                self._bundle(r),
+                reason,
+                correction,
+                at,
+                operation_id=group,
             )
             if other:
                 self._validate(other)
                 self._save(other, group)
                 self.s.event(
-                    actor, other["id"], d["kind"], extra_before, self._bundle(other), reason, at=at
+                    actor,
+                    other["id"],
+                    d["kind"],
+                    extra_before,
+                    self._bundle(other),
+                    reason,
+                    correction_of=extra_correction,
+                    at=at,
+                    operation_id=group,
                 )
             return {
                 "routerId": r["id"],
@@ -690,7 +741,25 @@ class Inventory:
                     loan["recipient"]["contact"] = None
                     loan["contactsPurgedAt"] = stamp(self.now())
                     self._put_loan(loan)
+                    for state in self.s.all("SELECT event_id,before_json FROM event_states"):
+                        before = json.loads(state["before_json"])
+                        for previous in before.get("loans", []):
+                            if previous["id"] == loan["id"]:
+                                previous["recipient"]["contact"] = None
+                                previous["contactsPurgedAt"] = loan["contactsPurgedAt"]
+                        self.s.run(
+                            "UPDATE event_states SET before_json=? WHERE event_id=?",
+                            stable(before),
+                            state["event_id"],
+                        )
                     count += 1
+            self.s.run(
+                "DELETE FROM telegram_users WHERE observed_at<? AND user_id NOT IN "
+                "(SELECT user_id FROM roles) AND user_id NOT IN "
+                "(SELECT json_extract(data,'$.recipient.contact.userId') FROM loans WHERE open=1 "
+                "AND json_extract(data,'$.recipient.contact.userId') IS NOT NULL)",
+                cutoff,
+            )
             self.s.event(actor, "privacy", "Удаление контактов", None, {"count": count})
             return {"count": count}
 

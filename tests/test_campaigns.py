@@ -76,13 +76,10 @@ def test_natural_queue_actions_and_actual_returns(ctx):
     c = campaign(ctx)
     assert [x["loan"]["place"]["name"] for x in ctx.c.queue(2, c)] == ["2", "12", "102"]
     loan_id = ctx.i.get(1, identifiers[0])["loan"]["id"]
-    for action in ("not_home", "new_date", "contacted", "problem", "next"):
-        ctx.c.member(2, key(), c, loan_id, {"action": action, "reason": "Результат обхода"})
+    ctx.c.member(2, key(), c, loan_id, {"action": "note", "reason": "Результат обхода"})
     assert ctx.i.get(1, identifiers[0])["loan"]["dueAt"] == "2027-07-01"
     with pytest.raises(DomainError, match="Нет доступа"):
-        ctx.c.member(
-            2, key(), c, loan_id, {"action": "priority", "priority": -1, "reason": "Порядок"}
-        )
+        ctx.c.member(2, key(), c, loan_id, {"action": "exclude", "reason": "Исключение"})
     receive(ctx, identifiers[0])
     assert len(ctx.c.queue(2, c)) == 2 and ctx.c.report(2, c)["returned"] == 1
 

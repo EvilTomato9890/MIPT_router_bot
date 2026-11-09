@@ -1,4 +1,4 @@
-"""SQLite transactions and durable workflow state. Schema v1 stays compatible."""
+"""SQLite transactions, immutable audit records and durable workflow state."""
 
 import json
 import sqlite3
@@ -21,6 +21,9 @@ class Store:
         migration = Path(__file__).with_name("migrations") / "001_initial.sql"
         self.db.executescript(migration.read_text(encoding="utf-8"))
         self.run("INSERT OR IGNORE INTO schema_migrations VALUES(1,?)", stamp())
+        recovery = migration.with_name("002_recovery.sql")
+        self.db.executescript(recovery.read_text(encoding="utf-8"))
+        self.run("INSERT OR IGNORE INTO schema_migrations VALUES(2,?)", stamp())
 
     def get(self, sql, *args):
         row = self.db.execute(sql, args).fetchone()
@@ -34,12 +37,18 @@ class Store:
 
     @contextmanager
     def transaction(self):
-        self.db.execute("BEGIN IMMEDIATE")
+        nested = self.db.in_transaction
+        savepoint = "sp_" + uuid().replace("-", "")
+        self.db.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
         try:
             yield
-            self.db.execute("COMMIT")
+            self.db.execute(f"RELEASE {savepoint}" if nested else "COMMIT")
         except BaseException:
-            self.db.execute("ROLLBACK")
+            if nested:
+                self.db.execute(f"ROLLBACK TO {savepoint}")
+                self.db.execute(f"RELEASE {savepoint}")
+            else:
+                self.db.execute("ROLLBACK")
             raise
 
     def atomic(self, actor, key, payload, operation):
@@ -69,7 +78,16 @@ class Store:
         )
 
     def event(
-        self, actor, object_id, action, before, after, reason=None, correction_of=None, at=None
+        self,
+        actor,
+        object_id,
+        action,
+        before,
+        after,
+        reason=None,
+        correction_of=None,
+        at=None,
+        operation_id=None,
     ):
         event_id = uuid()
         self.run(
@@ -84,6 +102,11 @@ class Store:
             reason,
             correction_of,
         )
+        # The public audit omits contacts. A private, erasable state is needed
+        # to undo contact edits as well as other fields without losing data.
+        if isinstance(before, dict) and "router" in before:
+            self.run("INSERT INTO event_states VALUES(?,?)", event_id, stable(before))
+            self.run("INSERT INTO event_groups VALUES(?,?)", event_id, operation_id or event_id)
         return event_id
 
     def draft(self, user, kind, data, now=None):

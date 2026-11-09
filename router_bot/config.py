@@ -19,7 +19,6 @@ class Config:
     title: str = "7ка"
     credentials: str = "./secrets/service-account.json"
     reminder_time: str = "10:00"
-    reminder_offsets: tuple = (14, 7, 1, 0)
     retention_days: int = 365
     backup_dir: str = "./backups"
     backup_keep: int = 14
@@ -41,9 +40,6 @@ def config(env=None, *, require_bot=True):
             title=env.get("SHEET_TITLE", "7ка"),
             credentials=env.get("GOOGLE_APPLICATION_CREDENTIALS", "./secrets/service-account.json"),
             reminder_time=env.get("REMINDER_TIME", "10:00"),
-            reminder_offsets=tuple(
-                int(x) for x in env.get("REMINDER_OFFSETS", "14,7,1,0").split(",")
-            ),
             retention_days=int(env.get("CONTACT_RETENTION_DAYS", 365)),
             backup_dir=env.get("BACKUP_DIR", "./backups"),
             backup_keep=int(env.get("BACKUP_KEEP", 14)),
@@ -61,10 +57,6 @@ def config(env=None, *, require_bot=True):
     )
     require(
         re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", c.reminder_time), "Неверное время напоминаний"
-    )
-    require(
-        c.reminder_offsets and all(0 <= n <= 365 for n in c.reminder_offsets),
-        "Неверные интервалы напоминаний",
     )
     require(
         c.retention_days >= 0 and c.backup_keep > 0 and c.alert_hours > 0,

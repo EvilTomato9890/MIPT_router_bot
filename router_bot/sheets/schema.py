@@ -1,5 +1,5 @@
 from ..service import place
-from ..util import clone, contact, equal, normalize_mac, overdue, require
+from ..util import clone, contact, contact_text, equal, normalize_mac, overdue, require
 
 HEADERS = [
     "Inv. №",
@@ -90,7 +90,7 @@ def projection(router, loan, now):
         "owner": recipient.get("name") or "",
         "checkin": legacy.get("checkin") if legacy.get("checkin") is not None else "",
         "checkout": legacy.get("checkout") if legacy.get("checkout") is not None else "",
-        "rawContact": (recipient.get("contact") or {}).get("raw") or "",
+        "rawContact": contact_text(recipient.get("contact")),
         "note": router.get("note") or "",
     }
 

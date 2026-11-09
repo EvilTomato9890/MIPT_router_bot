@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .service import place
-from .util import CONDITION, DomainError, iso_date, normalize_mac, require
+from .util import CONDITION, DomainError, contact, contact_text, iso_date, normalize_mac, require
 
 
 @dataclass
@@ -73,15 +73,19 @@ def is_person(data):
 
 def contact_fields():
     return [
-        string("phone", "Телефон (или -)", True),
-        string("telegram", "Telegram username, без @ (или -)", True),
+        string(
+            "contactInput", "Контакт: @telegram, ссылка t.me, телефон или всё вместе (или -)", True
+        ),
         number(
-            "userId", "Подтверждённый числовой Telegram ID (или -; по username не угадывать)", True
+            "userId",
+            "Telegram ID пока неизвестен. Введите подтверждённый числовой ID или -",
+            True,
+            lambda d: not d.get("userId"),
         ),
     ]
 
 
-def recipient_fields():
+def recipient_fields(extended=False):
     return [
         choice(
             "recipientKind", "Тип получателя", {"person": "Человек", "organization": "Организация"}
@@ -91,14 +95,13 @@ def recipient_fields():
             "responsible",
             "Ответственный человек организации (или -)",
             True,
-            lambda d: not is_person(d),
+            lambda d: extended and not is_person(d),
         ),
-        string("group", "Группа (или -)", True, is_person),
-        number("admissionYear", "Подтверждённый год поступления (или -)", True, is_person),
-        string("academicYear", "Учебный год, например 2026/2027 (или -)", True, is_person),
-        yes_no(
-            "collectionEligible",
-            "Эта личная выдача участвует в сборе указанного набора? Для общих помещений выбирайте «Нет».",
+        string("group", "Группа (или -)", True, lambda d: extended and is_person(d)),
+        number(
+            "admissionYear",
+            "Год поступления для ежегодного сбора (или -, если выдача не участвует в сборе)",
+            True,
             is_person,
         ),
         *contact_fields(),
@@ -200,7 +203,7 @@ def fields(kind, data=None):
         case "correct":
             return [string("eventId", "ID ошибочной операции из истории"), reason]
         case "loan_details":
-            recipient = [f for f in recipient_fields() if f.key != "recipientName"]
+            recipient = [f for f in recipient_fields(extended=True) if f.key != "recipientName"]
             return [
                 *recipient,
                 date_field("issuedAt", "Подтверждённая дата выдачи (или -, если неизвестна)", True),
@@ -222,23 +225,17 @@ def fields(kind, data=None):
             ]
         case "campaign":
             return [
-                string("name", "Название кампании"),
-                number("admissionYear", "Набор: год поступления (или -)", True),
-                string("academicYear", "Учебный год (или -; нужен хотя бы один критерий)", True),
-                date_field("startsAt", "Дата начала"),
+                number("admissionYear", "Год поступления набора"),
                 date_field("deadline", "Конечный срок"),
                 string("responsibleIds", "Числовые ID ответственных через запятую"),
-                string("location", "Место приёма"),
-                string("hours", "Часы работы"),
-                string("instruction", "Инструкция по сдаче"),
+                string("location", "Где и когда принимать роутеры"),
             ]
         case "campaign_edit":
             return [
                 string("responsibleIds", "Новые ID ответственных через запятую"),
                 date_field("deadline", "Конечный срок"),
-                string("hours", "Часы работы"),
-                string("instruction", "Инструкция"),
-                yes_no("active", "Кампания активна? (Нет — приостановить)"),
+                string("location", "Где и когда принимать роутеры"),
+                yes_no("active", "Сбор активен? (Нет — приостановить)"),
             ]
         case "campaign_include":
             return [string("loanInventory", "Номер роутера для явного включения"), reason]
@@ -246,35 +243,18 @@ def fields(kind, data=None):
             return [date_field("from", "Начало периода"), date_field("to", "Конец периода")]
         case "queue_action":
             actions = {
-                "not_home": "Не застали",
-                "contacted": "Связались",
-                "new_date": "Предложена другая дата (решает админ)",
-                "problem": "Проблема",
-                "next": "Следующий",
-                "exclude": "Исключить из кампании (админ)",
-                "assign": "Назначить оператора (админ)",
-                "priority": "Порядок (админ)",
+                "note": "Записать примечание",
+                "exclude": "Исключить из сбора (админ)",
+                "include": "Вернуть в сбор (админ)",
             }
             return [
                 choice("action", "Что сделано?", actions),
-                number(
-                    "operatorId",
-                    "ID назначенного оператора",
-                    when=lambda d: d.get("action") == "assign",
-                ),
-                Field(
-                    "priority",
-                    "Порядок (целое число; меньше — раньше)",
-                    lambda v: int(v),
-                    when=lambda d: d.get("action") == "priority",
-                ),
                 reason,
             ]
         case "queue_filters":
             return [
                 string("group", "Группа (или -)", True),
                 string("place", "Место (или -)", True),
-                number("operator", "Ответственный user_id (или -)", True),
             ]
         case "filters":
             return [
@@ -339,6 +319,11 @@ def fields(kind, data=None):
 
 
 def contact_from(data):
+    if "contactInput" in data:
+        value = contact(data["contactInput"])
+        value["userId"] = data.get("userId") or value["userId"]
+        value["raw"] = contact_text(value)
+        return value
     telegram = data.get("telegram", "").lstrip("@")
     return {
         "raw": " ".join(v for v in [data.get("phone"), "@" + telegram if telegram else ""] if v),
@@ -371,7 +356,7 @@ def command(kind, data, inventory, actor):
             },
             "place": place(d["placeName"]),
             "dueAt": d["dueAt"],
-            "collectionEligible": d.get("collectionEligible", False),
+            "collectionEligible": d.get("collectionEligible", bool(d.get("admissionYear"))),
         }
     if kind in {"return", "replace", "resolve_found", "inventory_check"}:
         out.update(
@@ -408,6 +393,7 @@ def command(kind, data, inventory, actor):
             }
         )
         out["contact"] = contact_from(d)
+        out["collectionEligible"] = d.get("collectionEligible", bool(d.get("admissionYear")))
         return out
     out.update(
         {
@@ -484,6 +470,7 @@ FIELD_LABELS = {
     "phone": "Телефон",
     "telegram": "Telegram",
     "userId": "Подтверждённый Telegram ID",
+    "contactInput": "Контакт",
     "dueAt": "Срок возврата",
     "issuedAt": "Дата выдачи",
     "reason": "Причина",

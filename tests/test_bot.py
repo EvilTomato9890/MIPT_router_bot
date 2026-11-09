@@ -117,7 +117,7 @@ def test_add_dialog_back_cancel_duplicate_update_and_confirmation(ctx, ui):
         "condition": "working",
         "storageName": "Тестовый склад",
     }
-    while bot._session(2):
+    while bot._session(2)["mode"] == "wizard":
         session = bot._session(2)
         field = fields(session["kind"], session["data"])[session["step"]]
         bot.handle(message(2, answers[field.key]))
@@ -139,7 +139,7 @@ def test_step_nonce_and_version_confirmation(ctx, ui):
     data = {"routerId": identifier, "expected": {identifier: 1}}
     bot.start(1, "vip", data)
     old = t.messages[-1]["markup"]["inline_keyboard"][0][0]["callback_data"]
-    bot.start(1, "vip", data)
+    bot.start(1, "vip", data, force=True)
     bot.handle(callback(1, old))
     assert bot._session(1)["step"] == 0 and "устарела" in t.messages[-1]["text"]
     bot.answer_wizard(1, "yes")
@@ -170,7 +170,7 @@ def test_views_export_queue_filter_and_button_sizes(ctx, ui):
     bot.card(1, identifier)
     bot.history(3, identifier)
     bot.start(3, "queue_filters", {"campaignId": c})
-    for answer in ("-", "-", "2"):
+    for answer in ("-", "-"):
         bot.answer_wizard(3, answer)
     assert len(t.messages) > 10
 

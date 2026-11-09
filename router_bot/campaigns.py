@@ -1,13 +1,13 @@
 import json
-from datetime import date, timedelta
+from datetime import timedelta
 
 from .util import clone, digest, iso_date, local_clock, natural, require, stable, stamp, text, uuid
 
 
 class Campaigns:
-    def __init__(self, inventory, *, time="10:00", offsets=(14, 7, 1, 0)):
+    def __init__(self, inventory, *, time="10:00"):
         self.i, self.s = inventory, inventory.s
-        self.time, self.offsets = time, sorted(offsets)
+        self.time = time
 
     def _get(self, identifier):
         row = self.s.get("SELECT * FROM campaigns WHERE id=?", identifier)
@@ -26,6 +26,32 @@ class Campaigns:
     def list(self, actor):
         self.i.authorize(actor)
         return [self._get(row["id"]) for row in self.s.all("SELECT id FROM campaigns")]
+
+    def _activate(self, actor, campaign):
+        # Previous years remain available as history; only one collection runs.
+        for row in self.s.all("SELECT id FROM campaigns WHERE id<>?", campaign["id"]):
+            old = self._get(row["id"])
+            if old["active"]:
+                previous = clone(old)
+                old["active"] = False
+                self._save(old)
+                self.s.run(
+                    "UPDATE reminders SET state='cancelled' WHERE campaign_id=? AND state='pending'",
+                    old["id"],
+                )
+                self.s.event(actor, old["id"], "Предыдущий сбор завершён", previous, old)
+
+    def simplify(self, actor):
+        """Upgrade older databases without losing collection history."""
+        self.i.authorize(actor, "admin")
+
+        def operation(_):
+            active = [c for c in self.list(actor) if c["active"]]
+            if active:
+                self._activate(actor, active[-1])
+            return {"active": active[-1]["id"] if active else None}
+
+        return self.s.atomic(actor, "single-collection-v1", {}, operation)
 
     def save(self, actor, key, data):
         self.i.authorize(actor, "admin")
@@ -52,6 +78,8 @@ class Campaigns:
                 require(text(c.get(field, "")), "Укажите место, часы и инструкцию")
             if old and "expectedVersion" in data:
                 require(old["version"] == data["expectedVersion"], "Кампания изменилась", "stale")
+            if c["active"]:
+                self._activate(actor, c)
             self._save(c)
             self.s.event(actor, c["id"], "Настройка кампании", old, c)
             return c
@@ -108,6 +136,7 @@ class Campaigns:
                     stable({"source": "cohort", "at": stamp(self.i.now())}),
                 )
             c["active"] = True
+            self._activate(actor, c)
             self._save(c)
             self.s.event(
                 actor,
@@ -121,11 +150,7 @@ class Campaigns:
         return self.s.atomic(actor, key, {"launch": identifier, "expected": expected}, operation)
 
     def member(self, actor, key, identifier, loan_id, data):
-        minimum = (
-            "admin"
-            if data["action"] in {"include", "exclude", "assign", "priority"}
-            else "operator"
-        )
+        minimum = "admin" if data["action"] in {"include", "exclude"} else "operator"
         self.i.authorize(actor, minimum)
 
         def operation(group):
@@ -145,17 +170,9 @@ class Campaigns:
             m = json.loads(previous["data"]) if previous else {"source": "manual"}
             if data["action"] in {"include", "exclude"}:
                 m.update(excluded=data["action"] == "exclude", reason=data["reason"])
-            elif data["action"] == "assign":
-                self.i.authorize(data["operatorId"], "operator")
-                loan["assignedOperator"] = data["operatorId"]
-                self.i._put_loan(loan)
-                self.i._save(self.i._router(loan["routerId"]), group)
-            elif data["action"] == "priority":
-                require(type(data.get("priority")) in {int, float}, "Приоритет должен быть числом")
-                m["priority"] = data["priority"]
             else:
                 require(
-                    data["action"] in {"not_home", "contacted", "new_date", "problem", "next"},
+                    data["action"] == "note",
                     "Приём оформляется физическим возвратом",
                 )
                 m["lastAction"] = {**data, "actor": actor, "at": stamp(self.i.now())}
@@ -216,8 +233,6 @@ class Campaigns:
                 continue
             if filters.get("place") and filters["place"] not in loan["place"]["name"]:
                 continue
-            if filters.get("operator") and loan.get("assignedOperator") != filters["operator"]:
-                continue
             result.append(
                 {
                     "router": r,
@@ -225,7 +240,8 @@ class Campaigns:
                     "member": member,
                     "due": due,
                     "excluded": excluded,
-                    "returned": not loan["open"],
+                    "returned": bool(not loan["open"] and loan.get("returnedAt")),
+                    "closedWithoutReturn": bool(not loan["open"] and not loan.get("returnedAt")),
                     "overdue": loan["open"] and due < today,
                     "lost": r["status"] == "lost",
                 }
@@ -235,7 +251,6 @@ class Campaigns:
             key=lambda x: (
                 x["excluded"],
                 not x["overdue"],
-                x["member"].get("priority", 0),
                 x["due"],
                 natural(x["loan"]["place"].get("floor")),
                 natural(x["loan"]["place"].get("section")),
@@ -249,10 +264,11 @@ class Campaigns:
         return {
             "plan": len(rows),
             "returned": sum(x["returned"] for x in rows),
-            "remaining": sum(not x["returned"] and not x["excluded"] for x in rows),
+            "remaining": sum(x["loan"]["open"] and not x["excluded"] for x in rows),
+            "closedWithoutReturn": sum(x["closedWithoutReturn"] for x in rows),
             "overdue": sum(x["overdue"] and not x["excluded"] for x in rows),
             "excluded": sum(x["excluded"] for x in rows),
-            "lost": sum(x["lost"] and not x["returned"] for x in rows),
+            "lost": sum(x["lost"] and x["loan"]["open"] for x in rows),
         }
 
     def tick(self, send):
@@ -270,16 +286,7 @@ class Campaigns:
             if not admin:
                 continue
             queue = [x for x in self.queue(admin["user_id"], c["id"]) if not x["excluded"]]
-            candidate = []
-            for x in queue:
-                diff = (date.fromisoformat(x["due"]) - date.fromisoformat(day)).days
-                stage = (
-                    "overdue:" + day
-                    if diff < 0
-                    else next((n for n in self.offsets if diff <= n), None)
-                )
-                if stage is not None:
-                    candidate.append([x["loan"]["id"], x["due"], stage])
+            candidate = [[x["loan"]["id"], x["due"], day] for x in queue]
             signature, live = digest(candidate), set()
             for target in c["responsibleIds"]:
                 try:

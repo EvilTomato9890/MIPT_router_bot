@@ -111,13 +111,30 @@ def iso_date(value, allow_empty=False):
 def contact(raw=""):
     raw = str(raw or "")
     username = re.search(r"(?:@|t\.me/)([a-zA-Z][a-zA-Z0-9_]{4,31})", raw)
-    phone = re.search(r"\+?\d[\d ()-]{8,}\d", raw)
+    identifier = re.search(r"tg://user\?id=(\d+)", raw)
+    # A numeric Telegram identifier must never be mistaken for a telephone.
+    phone_text = re.sub(r"tg://user\?id=\d+", "", raw)
+    phone = re.search(r"\+?\d[\d ()-]{8,}\d", phone_text)
     return {
         "raw": raw,
         "phone": phone[0].strip() if phone else None,
         "telegram": username[1] if username else None,
-        "userId": None,
+        "userId": int(identifier[1]) if identifier and valid_id(int(identifier[1])) else None,
     }
+
+
+def contact_text(value):
+    value = value or {}
+    raw = value.get("raw") or " ".join(
+        v
+        for v in (value.get("phone"), "@" + value["telegram"] if value.get("telegram") else "")
+        if v
+    )
+    identifier = value.get("userId")
+    if valid_id(identifier) and not re.search(r"tg://user\?id=" + str(identifier) + r"\b", raw):
+        raw = re.sub(r"\s*tg://user\?id=\d+", "", raw).strip()
+        raw = (raw + " tg://user?id=" + str(identifier)).strip()
+    return raw
 
 
 def local_clock(now=None):
