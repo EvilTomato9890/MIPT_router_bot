@@ -4,7 +4,7 @@ import json
 from collections import Counter
 from datetime import timedelta
 
-from ..contacts import resolve as resolve_contact
+from ..contacts import normalize as normalize_contact
 from ..util import (
     DomainError,
     clone,
@@ -356,7 +356,7 @@ class Synchronizer:
     def _import(self, actor, values, entry, group, reason=None):
         d = decode(values)
         if d["legacy"].get("contact"):
-            d["legacy"]["contact"] = resolve_contact(self.s, d["legacy"]["contact"])
+            d["legacy"]["contact"] = normalize_contact(d["legacy"]["contact"])
         old_id = entry.get("routerId")
         r = self.i._router(old_id) if old_id else self.i._new({**d, "id": uuid()})
         before = self.i._bundle(r) if old_id else None
@@ -370,21 +370,8 @@ class Synchronizer:
             if str(values.get("rawContact", "")) != (loan["recipient"].get("contact") or {}).get(
                 "raw", ""
             ):
-                previous = loan["recipient"].get("contact") or {}
                 parsed = contact(values.get("rawContact", ""))
-                same_username = bool(
-                    parsed["telegram"]
-                    and parsed["telegram"].casefold() == (previous.get("telegram") or "").casefold()
-                )
-                same_phone = bool(
-                    not parsed["telegram"]
-                    and not previous.get("telegram")
-                    and parsed["phone"]
-                    and parsed["phone"] == previous.get("phone")
-                )
-                if not parsed["userId"] and (same_username or same_phone):
-                    parsed["userId"] = previous.get("userId")
-                loan["recipient"]["contact"] = resolve_contact(self.s, parsed)
+                loan["recipient"]["contact"] = normalize_contact(parsed)
             if values.get("place", "") != loan["place"].get("name", ""):
                 loan["place"] = clone(d["place"])
             self.i._put_loan(loan)

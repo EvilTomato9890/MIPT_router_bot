@@ -457,10 +457,9 @@ def test_csv_injection(value):
     assert csv_cell(value).startswith("\"'")
 
 
-def test_moscow_day_and_period_counts(ctx):
+def test_moscow_issue_day(ctx):
     identifier = add(ctx)
     ctx.clock.at = datetime(2027, 6, 1, 22, tzinfo=UTC)
     issue(ctx, identifier)
     assert ctx.i.get(1, identifier)["loan"]["issuedAt"] == "2027-06-02"
-    report = ctx.i.loan_report(1, "2027-06-02", "2027-06-02")
-    assert report["loans"] == 1 and report["physical"] == 1
+    assert ctx.i.stats(1)["loans"] == 1 and ctx.i.stats(1)["physical"] == 1

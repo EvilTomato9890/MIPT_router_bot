@@ -2,7 +2,6 @@
 
 import json
 
-from .contacts import observe, resolve
 from .delivery import Delivery
 from .dialogs import FIELD_LABELS, LABELS, command, contact_from, fields
 from .service import ADMIN_ACTIONS
@@ -11,7 +10,6 @@ from .util import (
     CONDITION,
     STATUS,
     DomainError,
-    contact,
     csv_cell,
     equal,
     local_clock,
@@ -24,7 +22,7 @@ from .util import (
     valid_id,
 )
 
-READ_WIZARDS = {"filters", "loan_report", "queue_filters"}
+READ_WIZARDS = {"filters", "queue_filters"}
 CONTACT_WIZARDS = {"issue", "transfer", "loan_details"}
 ADMIN_WIZARDS = ADMIN_ACTIONS | {
     "role",
@@ -111,6 +109,9 @@ class Bot:
     def _session(self, actor):
         row = self.s.get("SELECT data FROM sessions WHERE user_id=?", actor)
         session = json.loads(row["data"]) if row else None
+        if session and session.get("kind") == "loan_report":
+            self.s.run("DELETE FROM sessions WHERE user_id=?", actor)
+            return None
         if (
             session
             and session.get("mode") in {"wizard", "confirm"}
@@ -157,11 +158,20 @@ class Bot:
         )
 
     def _clear(self, actor, cancel=False):
-        if cancel:
-            session = self._session(actor) or {}
-            if session.get("draftId"):
-                self.s.run("DELETE FROM drafts WHERE id=? AND user_id=?", session["draftId"], actor)
-        self.s.run("DELETE FROM sessions WHERE user_id=?", actor)
+        with self.s.transaction():
+            if cancel:
+                row = self.s.get("SELECT data FROM sessions WHERE user_id=?", actor)
+                session = json.loads(row["data"]) if row else {}
+                if session.get("draftId"):
+                    self.s.run(
+                        "DELETE FROM drafts WHERE id=? AND user_id=?", session["draftId"], actor
+                    )
+            self.s.run("DELETE FROM sessions WHERE user_id=?", actor)
+
+    def _cancel_all(self, actor):
+        with self.s.transaction():
+            self.s.cancel_drafts(actor)
+            self._clear(actor)
 
     def _offer_switch(self, actor, intent):
         session = self._session(actor)
@@ -244,10 +254,6 @@ class Bot:
         with self.s.transaction(), self.t.capture(actor):
             if self.s.get("SELECT 1 FROM processed_updates WHERE id=?", update["update_id"]):
                 return True
-            observe(self.s, (cb or m).get("from"), self.i.now())
-            for entity in m.get("entities", []):
-                if entity.get("type") == "text_mention":
-                    observe(self.s, entity.get("user"), self.i.now())
             try:
                 with self.s.transaction():
                     self.i.authorize(actor)
@@ -273,7 +279,7 @@ class Bot:
             except DomainError as error:
                 safe = str(error)
                 if error.code == "forbidden":
-                    self._clear(actor, cancel=True)
+                    self._cancel_all(actor)
                     safe = f"Нет доступа. Ваш Telegram ID: {actor}"
                 self.t.send(actor, safe)
             self.s.run("INSERT INTO processed_updates VALUES(?)", update["update_id"])
@@ -311,7 +317,7 @@ class Bot:
     def message(self, actor, message):
         self.i.authorize(actor)
         if message in {"/cancel", "Отмена"}:
-            self._clear(actor, cancel=True)
+            self._cancel_all(actor)
             return self.menu(actor)
         if message in {"/start", "/menu"}:
             return self.menu(actor)
@@ -365,6 +371,9 @@ class Bot:
         parts = callback.split(":")
         action, a, b, c = (parts + [""] * 4)[:4]
         if action == "menu":
+            return self.menu(actor)
+        if action == "discard":
+            self.s.cancel_preview(actor, a)
             return self.menu(actor)
         if action == "resume":
             return self.resume(actor)
@@ -557,6 +566,8 @@ class Bot:
         raise DomainError("Кнопка устарела. Откройте меню.")
 
     def start(self, actor, kind, data=None, *, force=False):
+        if kind == "loan_report":
+            return self.reports(actor)
         self.i.authorize(
             actor,
             "observer"
@@ -567,6 +578,11 @@ class Bot:
         )
         if not force and self._offer_switch(actor, {"kind": kind, "data": data or {}}):
             return
+        data = {**(data or {})}
+        if kind == "replace":
+            loan = self.i.get(actor, data["routerId"])["loan"]
+            if loan and loan.get("dueConfirmed") and loan.get("dueAt"):
+                data["dueAt"] = loan["dueAt"]
         self._save_session(
             actor,
             {
@@ -642,15 +658,6 @@ class Bot:
         all_fields = fields(kind, session["data"])
         require(session["step"] < len(all_fields), "Диалог уже завершён")
         f = all_fields[session["step"]]
-        if f.key == "userId" and not value.strip().isdigit():
-            resolved = resolve(self.s, contact(value))
-            require(
-                resolved.get("userId"),
-                "Введите числовой Telegram ID: для этого @ника ID неизвестен",
-            )
-            value = str(resolved["userId"])
-            if resolved.get("telegram"):
-                session["data"]["telegram"] = resolved["telegram"]
         try:
             session["data"][f.key] = f.parse(value)
         except (ValueError, OverflowError):
@@ -693,13 +700,6 @@ class Bot:
                 self.queue(actor, data["campaignId"], 0, filters)
                 if kind == "queue_filters"
                 else self.show_list(actor, filters)
-            )
-        if kind == "loan_report":
-            r = self.i.loan_report(actor, data["from"], data["to"])
-            self._clear(actor)
-            return self.send(
-                actor,
-                f"Выдач {r['from']} — {r['to']}: {r['loans']}. Разных физических роутеров: {r['physical']}. С неизвестной датой (вне периода): {r['unknownDates']}.",
             )
         special = {
             "role",
@@ -1039,17 +1039,14 @@ class Bot:
             "overdue": "Просроченные",
             "lost": "Утерянные",
             "unknown": "Неизвестные",
-            "incomplete": "Неполные данные",
-            "undefined_due": "Срок не определён",
-            "unknown_holder": "Получатель не определён",
-            "unknown_cohort": "Набор не подтверждён",
+            "incomplete": "Нужно уточнить",
             "check": "Проверка / ремонт",
             "vip": "VIP",
             "pending": "Ожидают таблицу",
             "conflicts": "Конфликты",
         }
         message = (
-            f"Физических роутеров: {stats['physical']}. Записей выдач за всё время: {stats['loans']}.\n"
+            f"Роутеров в учёте: {stats['physical']}.\n"
             + "\n".join(f"{STATUS[s]}: {n}" for s, n in stats["statuses"].items())
             + f"\nVIP: {stats['vip']} (пересекающийся признак)."
         )
@@ -1058,10 +1055,7 @@ class Bot:
             message,
             rows([button(v, "report:" + k) for k, v in categories.items()])
             + [
-                [
-                    button("Выдачи за период", "start:loan_report"),
-                    button("Фильтры", "start:filters"),
-                ],
+                [button("Фильтры", "start:filters")],
                 [button("Меню", "menu")],
             ],
         )
@@ -1166,7 +1160,7 @@ class Bot:
         )
         if changed:
             buttons.append([button("Применить проверенные изменения", "sa:" + identifier)])
-        buttons.append([button("Отмена", "menu")])
+        buttons.append([button("Отмена", "discard:" + identifier)])
         return self.send(
             actor,
             "Ошибки и неразобранные конфликты пропускаются с сохранением блокировки исходящей записи.",
@@ -1215,7 +1209,7 @@ class Bot:
         return self.send(
             actor,
             "Применить показанные исправления?",
-            [[button("Применить", "confirm:" + p["id"]), button("Отмена", "menu")]],
+            [[button("Применить", "confirm:" + p["id"]), button("Отмена", "discard:" + p["id"])]],
         )
 
     def campaign_list(self, actor, archive=False):
@@ -1269,7 +1263,7 @@ class Bot:
                     button("Настроить", "ce:" + identifier),
                 ],
                 [button("Включить выдачу явно", "cin:" + identifier)],
-                [button("Очередь", "queue:" + identifier), button("Отмена", "menu")],
+                [button("Очередь", "queue:" + identifier), button("Отмена", "discard:" + d)],
             ],
         )
 

@@ -4,7 +4,7 @@ import json
 import unicodedata
 from datetime import timedelta
 
-from .contacts import resolve as resolve_contact
+from .contacts import normalize as normalize_contact
 from .util import (
     CONDITION,
     STATUS,
@@ -79,6 +79,7 @@ class Inventory:
             if role:
                 self.s.run("INSERT INTO roles VALUES(?,?)", target, role)
             self.s.run("DELETE FROM sessions WHERE user_id=?", target)
+            self.s.cancel_drafts(target)
             self.s.event(
                 actor, str(target), "Изменение доступа", old["role"] if old else None, role
             )
@@ -163,19 +164,11 @@ class Inventory:
             ):
                 continue
             report = filters.get("report")
+            if report in {"undefined_due", "unknown_holder", "unknown_cohort"}:
+                report = "incomplete"
             predicates = {
                 "available": r["status"] == "stored" and r["condition"] == "working",
                 "overdue": overdue(loan, self.now()),
-                "undefined_due": bool(
-                    loan and (not loan.get("dueConfirmed") or not loan.get("dueAt"))
-                ),
-                "unknown_holder": bool(loan and (not p.get("name") or p.get("kind") == "unknown")),
-                "unknown_cohort": bool(
-                    loan
-                    and p.get("kind") != "organization"
-                    and not p.get("admissionYear")
-                    and not p.get("academicYear")
-                ),
                 "incomplete": r["status"] == "unknown"
                 or bool(
                     loan
@@ -184,8 +177,13 @@ class Inventory:
                         or not loan.get("dueAt")
                         or not p.get("name")
                         or p.get("kind") == "unknown"
+                        or not (
+                            (p.get("contact") or {}).get("phone")
+                            or valid_id((p.get("contact") or {}).get("userId"))
+                        )
                         or (
                             p.get("kind") == "person"
+                            and loan.get("collectionEligible") is True
                             and not p.get("admissionYear")
                             and not p.get("academicYear")
                         )
@@ -325,7 +323,7 @@ class Inventory:
         if (r.get("contact") or {}).get("userId"):
             require(valid_id(r["contact"]["userId"]), "Неверный подтверждённый Telegram ID")
         if r.get("contact"):
-            r["contact"] = resolve_contact(self.s, r["contact"])
+            r["contact"] = normalize_contact(r["contact"])
         if not legacy:
             details = r.get("contact") or {}
             method = details.get("method") or (
@@ -400,7 +398,21 @@ class Inventory:
         }
         require(legacy or loan["dueAt"], "Укажите подтверждённый срок")
         if loan["dueAt"] and loan["issuedAt"]:
-            require(loan["dueAt"] >= loan["issuedAt"], "Срок раньше даты выдачи")
+            inherited = (
+                self.s.get("SELECT data FROM loans WHERE id=?", linked_loan_id)
+                if linked_loan_id
+                else None
+            )
+            previous = json.loads(inherited["data"]) if inherited else {}
+            require(
+                loan["dueAt"] >= loan["issuedAt"]
+                or (
+                    previous.get("closedKind") == "replacement"
+                    and previous.get("dueConfirmed")
+                    and previous.get("dueAt") == loan["dueAt"]
+                ),
+                "Срок раньше даты выдачи",
+            )
         self._put_loan(loan)
         r.update(status="issued", storage=None)
         return loan
@@ -566,7 +578,9 @@ class Inventory:
                             **d,
                             "recipient": old["recipient"],
                             "place": old["place"],
-                            "dueAt": old.get("dueAt") or d.get("dueAt"),
+                            "dueAt": old["dueAt"]
+                            if old.get("dueConfirmed") and old.get("dueAt")
+                            else d.get("dueAt"),
                             "collectionEligible": old.get("collectionEligible", False),
                         },
                         actor,
@@ -589,6 +603,7 @@ class Inventory:
                         "Утрата уже отмечена или оборудование списано",
                     )
                     r.update(status="lost", loss={"reason": reason, "at": at, "actor": actor})
+                    r.pop("found", None)
                 case "found":
                     require(
                         r["status"] == "lost" and reason,
@@ -599,6 +614,11 @@ class Inventory:
                     require(
                         r["status"] == "lost" and r.get("found") and reason,
                         "Сначала зафиксируйте обнаружение и причину решения",
+                    )
+                    require(
+                        r["found"].get("at")
+                        and r["found"]["at"] >= (r.get("loss") or {}).get("at", ""),
+                        "Обнаружение относится к прежней утрате. Зафиксируйте новое обнаружение.",
                     )
                     if d.get("resolution") == "holder":
                         require(self._loan(r["id"]), "Нет прежней выдачи")
@@ -774,13 +794,6 @@ class Inventory:
                             state["event_id"],
                         )
                     count += 1
-            self.s.run(
-                "DELETE FROM telegram_users WHERE observed_at<? AND user_id NOT IN "
-                "(SELECT user_id FROM roles) AND user_id NOT IN "
-                "(SELECT json_extract(data,'$.recipient.contact.userId') FROM loans WHERE open=1 "
-                "AND json_extract(data,'$.recipient.contact.userId') IS NOT NULL)",
-                cutoff,
-            )
             self.s.event(actor, "privacy", "Удаление контактов", None, {"count": count})
             return {"count": count}
 
@@ -793,19 +806,4 @@ class Inventory:
             "statuses": {s: sum(r["status"] == s for r in rows) for s in STATUS},
             "vip": sum(r["vip"] for r in rows),
             "loans": self.s.get("SELECT count(*) AS n FROM loans")["n"],
-        }
-
-    def loan_report(self, actor, start, end):
-        self.authorize(actor)
-        require(iso_date(start) <= iso_date(end), "Начало позже конца периода")
-        loans = [json.loads(row["data"]) for row in self.s.all("SELECT data FROM loans")]
-        known = [
-            loan for loan in loans if loan.get("issuedAt") and start <= loan["issuedAt"] <= end
-        ]
-        return {
-            "from": start,
-            "to": end,
-            "loans": len(known),
-            "physical": len({loan["routerId"] for loan in known}),
-            "unknownDates": sum(not loan.get("issuedAt") for loan in loans),
         }

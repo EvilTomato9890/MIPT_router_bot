@@ -21,9 +21,10 @@ class Store:
         migration = Path(__file__).with_name("migrations") / "001_initial.sql"
         self.db.executescript(migration.read_text(encoding="utf-8"))
         self.run("INSERT OR IGNORE INTO schema_migrations VALUES(1,?)", stamp())
-        recovery = migration.with_name("002_recovery.sql")
-        self.db.executescript(recovery.read_text(encoding="utf-8"))
-        self.run("INSERT OR IGNORE INTO schema_migrations VALUES(2,?)", stamp())
+        for version, name in ((2, "002_recovery.sql"), (3, "003_simplify.sql")):
+            if not self.get("SELECT 1 FROM schema_migrations WHERE version=?", version):
+                self.db.executescript(migration.with_name(name).read_text(encoding="utf-8"))
+                self.run("INSERT OR IGNORE INTO schema_migrations VALUES(?,?)", version, stamp())
 
     def get(self, sql, *args):
         row = self.db.execute(sql, args).fetchone()
@@ -128,6 +129,31 @@ class Store:
             "Подтверждение устарело или принадлежит другому сотруднику",
         )
         return {**row, "data": json.loads(row["data"])}
+
+    def cancel_drafts(self, user):
+        self.run(
+            "DELETE FROM drafts WHERE user_id=? AND kind IN ('confirm','sync','colors','launch','switch')",
+            user,
+        )
+
+    def cancel_preview(self, user, draft_id):
+        with self.transaction():
+            draft = self.get("SELECT kind FROM drafts WHERE id=? AND user_id=?", draft_id, user)
+            require(
+                draft and draft["kind"] in {"sync", "colors", "launch"},
+                "Просмотр уже закрыт или принадлежит другому сотруднику",
+            )
+            self.run("DELETE FROM drafts WHERE id=? AND user_id=?", draft_id, user)
+            self.run(
+                "DELETE FROM drafts WHERE user_id=? AND kind='confirm' AND json_extract(data,'$.data.syncDraft')=?",
+                user,
+                draft_id,
+            )
+            self.run(
+                "DELETE FROM sessions WHERE user_id=? AND json_extract(data,'$.data.syncDraft')=?",
+                user,
+                draft_id,
+            )
 
     def activate_python(self):
         """Invalidate only unfinished dialogs when switching engines, once."""

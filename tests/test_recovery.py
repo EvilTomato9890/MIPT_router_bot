@@ -9,7 +9,7 @@ from test_sync import legacy
 from router_bot.bot import Bot
 from router_bot.campaigns import Campaigns
 from router_bot.config import Config
-from router_bot.contacts import observe, resolve
+from router_bot.contacts import normalize
 from router_bot.db import Store
 from router_bot.dialogs import fields
 from router_bot.main import maintain, sheets_worker
@@ -332,44 +332,42 @@ def test_worker_blocked_on_sheet_does_not_block_accounting(ctx, tmp_path):
     assert not worker.is_alive()
 
 
-def test_observed_username_resolves_id_without_granting_access(ctx):
+def test_username_is_not_a_numeric_id_or_access_right(ctx):
     bot, _ = ui(ctx)
     update = message(99, "/start")
     update["message"]["from"]["username"] = "known_user"
     bot.handle(update)
-    assert resolve(ctx.s, contact("@KNOWN_USER"))["userId"] == 99
+    assert normalize(contact("@KNOWN_USER"))["userId"] is None
+    assert not ctx.s.get("SELECT 1 FROM sqlite_master WHERE name='telegram_users'")
     with pytest.raises(DomainError, match="Нет доступа"):
         ctx.i.authorize(99)
     identifier = add(ctx)
-    issue(ctx, identifier, recipient={**person(), "contact": contact("@known_user")})
+    issue(
+        ctx, identifier, recipient={**person(), "contact": {**contact("@known_user"), "userId": 99}}
+    )
     exported = projection(ctx.i.get(1, identifier), ctx.i.get(1, identifier)["loan"], ctx.clock.at)
     assert "@known_user" in exported["rawContact"] and "tg://user?id=99" in exported["rawContact"]
     assert contact(exported["rawContact"])["userId"] == 99
     assert contact("tg://user?id=1234567890")["phone"] is None
 
 
-def test_unknown_username_never_fabricates_id_and_confirmed_pair_is_reused(ctx):
-    assert resolve(ctx.s, contact("@unknown_user"))["userId"] is None
+def test_username_never_recovers_id_from_an_earlier_loan(ctx):
+    assert normalize(contact("@unknown_user"))["userId"] is None
     first, second = add(ctx, "FIRST"), add(ctx, "SECOND")
     issue(ctx, first, recipient={**person(), "contact": {**contact("@manual_user"), "userId": 200}})
-    issue(ctx, second, recipient={**person(), "contact": contact("@manual_user")})
-    assert ctx.i.get(1, second)["loan"]["recipient"]["contact"]["userId"] == 200
-    observe(ctx.s, {"id": 200, "username": "renamed_user"}, ctx.clock.at)
-    assert resolve(ctx.s, contact("@manual_user"))["userId"] is None
-    observe(ctx.s, {"id": 300, "username": "renamed_user"}, ctx.clock.at)
-    assert resolve(ctx.s, contact("@renamed_user"))["userId"] == 300
+    issue(ctx, second, recipient={**person(), "contact": contact("@manual_user +70000000000")})
+    assert ctx.i.get(1, second)["loan"]["recipient"]["contact"]["userId"] is None
 
 
-def test_short_issue_dialog_can_choose_known_id_and_share_phone(ctx):
+def test_short_issue_dialog_can_choose_numeric_id_and_share_phone(ctx):
     identifier = add(ctx)
-    observe(ctx.s, {"id": 100, "username": "known_user"}, ctx.clock.at)
     bot, telegram = ui(ctx)
     bot.start(2, "issue", {"routerId": identifier})
     values = dict(
         recipientKind="person",
         recipientName="Тест",
         admissionYear="2026",
-        userId="@known_user",
+        userId="100",
         placeName="101",
         dueAt="2027-07-01",
     )
@@ -503,7 +501,7 @@ def test_stale_switch_button_never_discards_a_later_command(ctx):
     bot.handle(message(2, "NEW-COMMAND"))
     bot.handle(callback(2, switch))
     assert bot._session(2)["data"]["inventory"] == "NEW-COMMAND"
-    assert "устарела" in telegram.messages[-1]["text"]
+    assert "устаре" in telegram.messages[-1]["text"]
 
 
 def test_pending_offline_recipient_does_not_block_other_staff(ctx):
@@ -522,7 +520,13 @@ def test_pending_offline_recipient_does_not_block_other_staff(ctx):
 
 
 @pytest.mark.parametrize(
-    "changed_contact,expected_id", [("@other_user", None), ("", None), ("@next_user", 333)]
+    "changed_contact,expected_id",
+    [
+        ("@other_user", None),
+        ("", None),
+        ("@first_user", None),
+        ("@next_user tg://user?id=333", 333),
+    ],
 )
 def test_sheet_contact_edit_does_not_keep_previous_identity(ctx, changed_contact, expected_id):
     identifier = add(ctx)
@@ -531,7 +535,6 @@ def test_sheet_contact_edit_does_not_keep_previous_identity(ctx, changed_contact
         identifier,
         recipient={**person(), "contact": {**contact("@first_user"), "userId": 222}},
     )
-    observe(ctx.s, {"id": 333, "username": "next_user"}, ctx.clock.at)
     ctx.sync.flush()
     ctx.a.sheet["rows"][0]["values"]["rawContact"] = changed_contact
     preview = ctx.sync.preview(1)

@@ -4,7 +4,6 @@ from test_bot import FakeTelegram, callback, confirm_button, message
 
 from router_bot.bot import Bot
 from router_bot.campaigns import Campaigns
-from router_bot.contacts import observe
 from router_bot.db import Store
 from router_bot.dialogs import fields
 from router_bot.service import Inventory, place
@@ -64,8 +63,7 @@ def finish(bot, telegram):
         "++79991234567",
     ],
 )
-def test_phone_is_required_even_when_username_is_known(ctx, value):
-    observe(ctx.s, {"id": 100, "username": "known_user"}, ctx.clock.at)
+def test_phone_is_required_even_with_a_username(ctx, value):
     identifier, bot, telegram = phone_step(ctx)
     step = bot._session(2)["step"]
     bot.handle(message(2, value))
@@ -199,13 +197,12 @@ def test_previous_confirmation_returns_to_required_contact_and_preserves_answers
 
 
 @pytest.mark.parametrize("kind", ["issue", "transfer", "loan_details"])
-def test_accounting_cannot_bypass_required_phone_with_an_automatic_id(ctx, kind):
+def test_accounting_cannot_bypass_required_phone_with_an_id(ctx, kind):
     identifier = add(ctx)
     if kind != "issue":
         issue(ctx, identifier)
     before = ctx.i.get(1, identifier)
-    observe(ctx.s, {"id": 100, "username": "known_user"}, ctx.clock.at)
-    details = {**contact("@known_user"), "method": "phone"}
+    details = {**contact("@known_user"), "method": "phone", "userId": 100}
     command = {"kind": kind, "routerId": identifier, "reason": "Проверка"}
     if kind == "loan_details":
         command.update(recipientKind="person", contact=details)

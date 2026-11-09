@@ -98,7 +98,8 @@ def test_revoked_dialog_and_old_admin_buttons(ctx, ui):
     bot.handle(callback(2, "sa:" + preview["id"]))
     assert "Нет доступа" in t.messages[-1]["text"]
     bot.handle(callback(2, "confirm:" + colors["id"]))
-    assert "Нет доступа" in t.messages[-1]["text"]
+    assert "Нет доступа" in t.messages[-1]["text"] or "устарело" in t.messages[-1]["text"]
+    assert not ctx.a.sheet["rules"]
 
 
 def test_add_dialog_back_cancel_duplicate_update_and_confirmation(ctx, ui):

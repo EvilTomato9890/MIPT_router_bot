@@ -178,7 +178,6 @@ class ColorRepair:
 
         def operation(_):
             self.i.authorize(actor, "admin")
-            self.i.s.set("colors_managed", True)
             self.i.s.event(
                 actor,
                 "sheet:" + str(sheet["sheetId"]),

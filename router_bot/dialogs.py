@@ -261,8 +261,6 @@ def fields(kind, data=None):
             ]
         case "campaign_include":
             return [string("loanInventory", "Номер роутера для явного включения"), reason]
-        case "loan_report":
-            return [date_field("from", "Начало периода"), date_field("to", "Конец периода")]
         case "queue_action":
             actions = {
                 "note": "Записать примечание",
@@ -287,7 +285,7 @@ def fields(kind, data=None):
                         "all": "Все",
                         "available": "Доступные",
                         "overdue": "Просроченные",
-                        "incomplete": "Неполные данные",
+                        "incomplete": "Нужно уточнить",
                         "check": "Проверка / ремонт",
                         "pending": "Ожидают таблицу",
                         "conflicts": "Конфликты",
@@ -471,7 +469,6 @@ LABELS = {
     "campaign": "Создать кампанию",
     "campaign_edit": "Настроить кампанию",
     "campaign_include": "Включить выдачу",
-    "loan_report": "Выдачи за период",
     "queue_action": "Действие в очереди",
     "queue_filters": "Фильтры очереди",
     "filters": "Фильтры",

@@ -14,7 +14,7 @@ from .campaigns import Campaigns
 from .config import config
 from .db import Store
 from .service import Inventory
-from .sheets.colors import ColorRepair, color_plan
+from .sheets.colors import ColorRepair
 from .sheets.google import GoogleSheets
 from .sheets.memory import MemorySheets
 from .sheets.sync import Synchronizer
@@ -79,13 +79,6 @@ def maintain(store, inventory, telegram, campaigns, c, sync=None, adapter=None):
     if sync:
         sync.refresh_day()
         sync.flush()
-    if adapter and store.setting("colors_managed"):
-        try:
-            plan = color_plan(adapter.read())
-            if plan["changed"]:
-                adapter.batch(plan["requests"])
-        except Exception:
-            pass
     campaigns.tick(
         lambda actor, message: (
             inventory.authorize(actor, "operator"),
@@ -138,20 +131,10 @@ def sheets_worker(c, stop, memory_adapter=None, *, now=now_utc):
         inventory = Inventory(store, now=now)
         adapter = memory_adapter if c.mode == "memory" else adapter_for(c)
         sync = Synchronizer(inventory, adapter)
-        last_colors = 0
         while not stop.is_set():
             try:
                 sync.refresh_day()
                 sync.flush(limit=5, should_stop=stop.is_set)
-                if (
-                    not stop.is_set()
-                    and store.setting("colors_managed")
-                    and time.monotonic() - last_colors >= 30
-                ):
-                    last_colors = time.monotonic()
-                    plan = color_plan(adapter.read())
-                    if plan["changed"] and not stop.is_set():
-                        adapter.batch(plan["requests"])
             except Exception:
                 log.warning("Обновление таблицы отложено; очередь сохранена.")
             stop.wait(1)
