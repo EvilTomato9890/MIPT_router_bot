@@ -5,6 +5,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -12,13 +13,13 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version-file: .python-version
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
-      - run: python -m pip install --require-hashes -r requirements-dev.txt
-      - run: python -m ruff check .
-      - run: python -m ruff format --check .
-      - run: python -m pytest -q
-      - run: python -m router_bot demo
+          version: "0.13.7"
+          enable-cache: true
+      - run: uv python install
+      - run: uv sync --locked
+      - run: uv run --frozen python -m ruff check .
+      - run: uv run --frozen python -m ruff format --check .
+      - run: uv run --frozen python -m pytest -q
+      - run: uv run --frozen python -m router_bot demo
