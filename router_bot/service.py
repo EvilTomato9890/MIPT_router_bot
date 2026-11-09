@@ -442,6 +442,12 @@ class Inventory:
         for loan in prior["loans"]:
             current = self.s.get("SELECT data FROM loans WHERE id=?", loan["id"])
             saved = json.loads(current["data"]) if current else {}
+            # Old audit snapshots keep the old model; restored live records do not.
+            loan.pop("kitOut", None)
+            loan.pop("kitIn", None)
+            if loan.get("place"):
+                loan["place"].pop("type", None)
+            loan.setdefault("collectionEligible", saved.get("collectionEligible", False))
             if saved.get("contactsPurgedAt"):
                 loan["recipient"]["contact"] = None
                 loan["contactsPurgedAt"] = saved["contactsPurgedAt"]
@@ -470,7 +476,7 @@ class Inventory:
             for identifier, version in d.get("expected", {}).items():
                 require(
                     self._router(identifier)["version"] == version,
-                    "Карточка изменилась. Откройте новое подтверждение.",
+                    "Карточка изменилась. Сверьте её и начните операцию заново (/cancel).",
                     "stale",
                 )
             r = self._new(d) if d["kind"] == "add" else self._router(d["routerId"])

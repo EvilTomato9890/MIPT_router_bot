@@ -534,7 +534,11 @@ def test_sheet_contact_edit_does_not_keep_previous_identity(ctx, changed_contact
     assert saved["userId"] == expected_id
 
 
-def test_upgrade_archives_older_active_collections_once(ctx):
+def test_upgrade_archives_older_active_collections_once(ctx, monkeypatch):
+    identifiers = iter(
+        ["ffffffff-ffff-4fff-afff-ffffffffffff", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"]
+    )
+    monkeypatch.setattr("router_bot.campaigns.uuid", lambda: next(identifiers))
     first = campaign(ctx)
     second = campaign(ctx, name="Последний сбор")
     previous = ctx.c._get(first)
@@ -545,3 +549,26 @@ def test_upgrade_archives_older_active_collections_once(ctx):
     count = ctx.s.get("SELECT count(*) AS n FROM events")["n"]
     ctx.c.simplify(1)
     assert ctx.s.get("SELECT count(*) AS n FROM events")["n"] == count
+
+
+def test_undo_old_event_does_not_restore_removed_equipment_or_place_type(ctx):
+    identifier = add(ctx)
+    issue(ctx, identifier)
+    previous = ctx.i._bundle(ctx.i._router(identifier))
+    previous["router"]["kit"] = {"power": True}
+    previous["loans"][0]["place"]["type"] = "room"
+    previous["loans"][0]["kitOut"] = {"power": True}
+    previous["loans"][0]["kitIn"] = None
+    previous["loans"][0].pop("collectionEligible")
+    event = ctx.s.event(1, identifier, "note", previous, ctx.i._bundle(ctx.i._router(identifier)))
+    ctx.s.run("DELETE FROM event_states WHERE event_id=?", event)
+    ctx.i.execute(
+        1,
+        key(),
+        {"kind": "correct", "routerId": identifier, "eventId": event, "reason": "Старая операция"},
+    )
+    router = ctx.i.get(1, identifier)
+    assert "kit" not in router
+    assert not {"kitOut", "kitIn"} & router["loan"].keys()
+    assert "type" not in router["loan"]["place"]
+    assert router["loan"]["collectionEligible"] is True

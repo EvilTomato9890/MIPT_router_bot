@@ -25,7 +25,9 @@ class Campaigns:
 
     def list(self, actor):
         self.i.authorize(actor)
-        return [self._get(row["id"]) for row in self.s.all("SELECT id FROM campaigns")]
+        return [
+            self._get(row["id"]) for row in self.s.all("SELECT id FROM campaigns ORDER BY rowid")
+        ]
 
     def _activate(self, actor, campaign):
         # Previous years remain available as history; only one collection runs.
